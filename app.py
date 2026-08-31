@@ -8,14 +8,18 @@ st.set_page_config(
     page_title="S&P 500 Trading Hub", page_icon="📈", layout="wide"
 )
 
-# Speicher für aktive Trades im Sitzungsspeicher (Session State)
+# ---------------------------------------------------------
+# SPEICHER FÜR TRADES (Session State)
+# ---------------------------------------------------------
 if "my_trades" not in st.session_state:
-  st.session_state.my_trades = []
+  st.session_state.my_trades = {}  # Format: {'TICKER': {'status': 'Offen'}}
 
 st.title("📈 S&P 500 Live Screener & Trade Manager")
 
 
-# 1. Daten laden und analysieren
+# ---------------------------------------------------------
+# 1. DATEN LADEN & ANALYSIEREN
+# ---------------------------------------------------------
 @st.cache_data(ttl=3600)
 def load_screener_data():
   url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
@@ -58,7 +62,9 @@ def load_screener_data():
     trend_ok = e10 > e21
 
     enter_fall1 = crossover_now and macd_ok
-    enter_fall2 = trend_ok and (l_price <= e10) and macd_ok and (not crossover_now)
+    enter_fall2 = (
+        trend_ok and (l_price <= e10) and macd_ok and (not crossover_now)
+    )
 
     near_retest = trend_ok and (l_price <= e10 * 1.02) and (l_price > e10)
     near_crossover = (
@@ -80,6 +86,9 @@ def load_screener_data():
     else:
       continue
 
+    ema_diff = abs(e10 - e21)
+    has_red_ema = (c_price < e10) or (c_price < e21)
+
     results.append({
         "Aktie": sym,
         "Status": status,
@@ -87,6 +96,8 @@ def load_screener_data():
         "Kurs": round(c_price, 2),
         "EMA 10": round(e10, 2),
         "EMA 21": round(e21, 2),
+        "EMA Differenz": round(ema_diff, 2),
+        "Has Red EMA": has_red_ema,
     })
 
   return pd.DataFrame(results), close_w, ema21, ema10
@@ -94,74 +105,122 @@ def load_screener_data():
 
 df_setups, close_w, ema21, ema10 = load_screener_data()
 
-# ==========================================
-# SEKTION 1: MEINE GENOMMENEN TRADES (TRACKER)
-# ==========================================
+# ---------------------------------------------------------
+# SEKTION 1: MEINE GENOMMENEN TRADES (TRACKER & GEWINNE)
+# ---------------------------------------------------------
 st.subheader("🎯 Meine aktiven Trades")
 
 if len(st.session_state.my_trades) == 0:
   st.info("Noch keine Trades markiert. Wählen Sie unten ein Setup aus!")
 else:
-  trade_data = []
-  for sym in st.session_state.my_trades:
+  for sym, info in list(st.session_state.my_trades.items()):
     curr_price = close_w[sym].iloc[-1]
     curr_e21 = ema21[sym].iloc[-1]
 
+    # Status-Logik
     if curr_price < curr_e21:
       health = "❌ INVALIDIERT (SL Greift!)"
+      health_color = "red"
     elif curr_price <= curr_e21 * 1.02:
       health = "⚠️ FAST INVALIDIERT (Nahe 21 EMA)"
+      health_color = "orange"
     else:
       health = "✅ IN ORDNUNG (Im Trend)"
+      health_color = "green"
 
-    trade_data.append({
-        "Aktie": sym,
-        "Aktueller Kurs": f"${round(curr_price, 2)}",
-        "21 EMA (Stopp)": f"${round(curr_e21, 2)}",
-        "Trade Status": health,
-    })
+    # Zeile im Portfolio bauen
+    with st.container(border=True):
+      c1, c2, c3, c4, c5 = st.columns([1.5, 2.5, 2, 2.5, 1.5])
 
-  st.dataframe(pd.DataFrame(trade_data), use_container_width=True)
+      c1.markdown(f"### **{sym}**")
+      c2.markdown(
+          f"Status: :{health_color}[**{health}**]\n\n*Profit-Status:* **{info['status']}**"
+      )
+      c3.markdown(
+          f"**Kurs:** ${round(curr_price, 2)}\n\n**21 EMA:**"
+          f" ${round(curr_e21, 2)}"
+      )
+
+      # Buttons für Gewinnmitnahme
+      if c4.button("50% Gewinn genommen", key=f"tp50_{sym}"):
+        st.session_state.my_trades[sym]["status"] = "💰 50% Gewinn gesichert"
+        st.rerun()
+
+      if c4.button("90% Gewinn genommen", key=f"tp90_{sym}"):
+        st.session_state.my_trades[sym]["status"] = (
+            "🚀 90% Gewinn gesichert (Rest läuft)"
+        )
+        st.rerun()
+
+      # Button zum Entfernen aus der Liste
+      if c5.button("🗑️ Schließen", key=f"remove_{sym}", use_container_width=True):
+        del st.session_state.my_trades[sym]
+        st.rerun()
 
 st.divider()
 
-# ==========================================
-# SEKTION 2: NEUE SETUPS (KÄSTEN-GRID)
-# ==========================================
+# ---------------------------------------------------------
+# SEKTION 2: FILTER & NEUE SETUPS (KÄSTEN-GRID)
+# ---------------------------------------------------------
 st.subheader("🔍 Aktuelle Markt-Setups (S&P 500)")
 
 if df_setups.empty:
   st.write("Aktuell keine aktiven Setups vorhanden.")
 else:
+  # Filter-Leiste aufbauen
+  f_col1, f_col2 = st.columns([2, 2])
+
+  with f_col1:
+    status_filter = st.multiselect(
+        "Nach Status filtern:",
+        options=["BEREIT", "FAST BEREIT"],
+        default=["BEREIT", "FAST BEREIT"],
+    )
+
+  with f_col2:
+    only_red_ema = st.checkbox(
+        "Nur Trades anzeigen, bei denen mind. eine EMA rot ist"
+    )
+
+  # Filter anwenden
+  filtered_df = df_setups[df_setups["Status"].isin(status_filter)]
+  if only_red_ema:
+    filtered_df = filtered_df[filtered_df["Has Red EMA"] == True]
+
+  st.write(f"Gefundene Setups: **{len(filtered_df)}**")
+
   # 3 Kästen pro Zeile anzeigen
   cols = st.columns(3)
 
-  for idx, row in df_setups.iterrows():
+  for idx, (_, row) in enumerate(filtered_df.iterrows()):
     col = cols[idx % 3]
 
     with col:
-      # Kasten (Container) erstellen
       with st.container(border=True):
-        # 1. Obere Zeile: Fett Name + Status
-        st.markdown(f"### **{row['Aktie']} — {row['Status']}**")
+        # 1. Titel mit Emoji & Farbe je nach Status
+        if row["Status"] == "BEREIT":
+          title_html = (
+              f"### **{row['Aktie']} —** :green[🚀 **BEREIT**]"
+          )
+        else:
+          title_html = (
+              f"### **{row['Aktie']} —** :orange[⚠️ **FAST BEREIT**]"
+          )
+
+        st.markdown(title_html)
         st.caption(f"Setup: {row['Typ']}")
 
-        # 2. Zweite Zeile: Aktueller Preis
-        st.markdown(f"**Preis:** `${row['Kurs']}`")
+        # 2. Preis & EMA Differenz
+        st.markdown(
+            f"**Preis:** `${row['Kurs']}` | **EMA-Diff:**"
+            f" `${row['EMA Differenz']}`"
+        )
 
-        # 3. Farb-Logik für EMA 10
-        if row["Kurs"] > row["EMA 10"]:
-          ema10_color = "green"
-        else:
-          ema10_color = "red"
+        # 3. EMA Farben ermitteln
+        ema10_color = "green" if row["Kurs"] > row["EMA 10"] else "red"
+        ema21_color = "green" if row["Kurs"] > row["EMA 21"] else "red"
 
-        # 4. Farb-Logik für EMA 21
-        if row["Kurs"] > row["EMA 21"]:
-          ema21_color = "green"
-        else:
-          ema21_color = "red"
-
-        # EMA-Werte mit Farbcodierung anzeigen
+        # EMA-Werte anzeigen
         st.markdown(
             f"**10 EMA:** :{ema10_color}[${row['EMA 10']}] | **21 EMA:**"
             f" :{ema21_color}[${row['EMA 21']}]"
@@ -169,7 +228,7 @@ else:
 
         st.markdown("---")
 
-        # 5. Untere Zeile: Button "Trade genommen"
+        # 4. Button "Trade genommen"
         already_taken = row["Aktie"] in st.session_state.my_trades
         if st.button(
             "Trade genommen" if not already_taken else "Im Portfolio",
@@ -177,5 +236,5 @@ else:
             disabled=already_taken,
             use_container_width=True,
         ):
-          st.session_state.my_trades.append(row["Aktie"])
+          st.session_state.my_trades[row["Aktie"]] = {"status": "Offen"}
           st.rerun()
