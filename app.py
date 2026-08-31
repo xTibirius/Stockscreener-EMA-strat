@@ -1,4 +1,6 @@
 from io import StringIO
+import json
+import os
 import pandas as pd
 import requests
 import streamlit as st
@@ -9,10 +11,31 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------
-# SPEICHER FÜR TRADES (Session State)
+# DAUERHAFTES SPEICHERN (JSON-Datei auf der Festplatte)
 # ---------------------------------------------------------
+TRADES_FILE = "trades.json"
+
+
+def load_saved_trades():
+  """Lädt die gespeicherten Trades aus der JSON-Datei."""
+  if os.path.exists(TRADES_FILE):
+    try:
+      with open(TRADES_FILE, "r") as f:
+        return json.load(f)
+    except Exception:
+      return {}
+  return {}
+
+
+def save_trades(trades_dict):
+  """Speichert die Trades dauerhaft in der JSON-Datei."""
+  with open(TRADES_FILE, "w") as f:
+    json.dump(trades_dict, f, indent=4)
+
+
+# Beim Start die gespeicherten Trades laden
 if "my_trades" not in st.session_state:
-  st.session_state.my_trades = {}  # Format: {'TICKER': {'status': 'Offen'}}
+  st.session_state.my_trades = load_saved_trades()
 
 st.title("📈 S&P 500 Live Screener & Trade Manager")
 
@@ -134,7 +157,8 @@ else:
 
       c1.markdown(f"### **{sym}**")
       c2.markdown(
-          f"Status: :{health_color}[**{health}**]\n\n*Profit-Status:* **{info['status']}**"
+          f"Status: :{health_color}[**{health}**]\n\n*Profit-Status:*"
+          f" **{info['status']}**"
       )
       c3.markdown(
           f"**Kurs:** ${round(curr_price, 2)}\n\n**21 EMA:**"
@@ -144,17 +168,20 @@ else:
       # Buttons für Gewinnmitnahme
       if c4.button("50% Gewinn genommen", key=f"tp50_{sym}"):
         st.session_state.my_trades[sym]["status"] = "💰 50% Gewinn gesichert"
+        save_trades(st.session_state.my_trades)
         st.rerun()
 
       if c4.button("90% Gewinn genommen", key=f"tp90_{sym}"):
         st.session_state.my_trades[sym]["status"] = (
             "🚀 90% Gewinn gesichert (Rest läuft)"
         )
+        save_trades(st.session_state.my_trades)
         st.rerun()
 
       # Button zum Entfernen aus der Liste
       if c5.button("🗑️ Schließen", key=f"remove_{sym}", use_container_width=True):
         del st.session_state.my_trades[sym]
+        save_trades(st.session_state.my_trades)
         st.rerun()
 
 st.divider()
@@ -167,23 +194,31 @@ st.subheader("🔍 Aktuelle Markt-Setups (S&P 500)")
 if df_setups.empty:
   st.write("Aktuell keine aktiven Setups vorhanden.")
 else:
-  # Filter-Leiste aufbauen
-  f_col1, f_col2 = st.columns([2, 2])
+  # Einheitliche Checkbox-Filterleiste
+  f_col1, f_col2, f_col3 = st.columns(3)
 
   with f_col1:
-    status_filter = st.multiselect(
-        "Nach Status filtern:",
-        options=["BEREIT", "FAST BEREIT"],
-        default=["BEREIT", "FAST BEREIT"],
-    )
+    show_bereit = st.checkbox("🚀 BEREIT anzeigen", value=True)
 
   with f_col2:
-    only_red_ema = st.checkbox(
-        "Nur Trades anzeigen, bei denen mind. eine EMA rot ist"
-    )
+    show_fast_bereit = st.checkbox("⚠️ FAST BEREIT anzeigen", value=True)
+
+  with f_col3:
+    only_red_ema = st.checkbox("Nur mit mind. 1 roten EMA")
 
   # Filter anwenden
-  filtered_df = df_setups[df_setups["Status"].isin(status_filter)]
+  filtered_df = df_setups.copy()
+
+  # Status Filter-Logik
+  selected_statuses = []
+  if show_bereit:
+    selected_statuses.append("BEREIT")
+  if show_fast_bereit:
+    selected_statuses.append("FAST BEREIT")
+
+  filtered_df = filtered_df[filtered_df["Status"].isin(selected_statuses)]
+
+  # EMA Filter-Logik
   if only_red_ema:
     filtered_df = filtered_df[filtered_df["Has Red EMA"] == True]
 
@@ -199,13 +234,9 @@ else:
       with st.container(border=True):
         # 1. Titel mit Emoji & Farbe je nach Status
         if row["Status"] == "BEREIT":
-          title_html = (
-              f"### **{row['Aktie']} —** :green[🚀 **BEREIT**]"
-          )
+          title_html = f"### **{row['Aktie']} —** :green[🚀 **BEREIT**]"
         else:
-          title_html = (
-              f"### **{row['Aktie']} —** :orange[⚠️ **FAST BEREIT**]"
-          )
+          title_html = f"### **{row['Aktie']} —** :orange[⚠️ **FAST BEREIT**]"
 
         st.markdown(title_html)
         st.caption(f"Setup: {row['Typ']}")
@@ -237,4 +268,5 @@ else:
             use_container_width=True,
         ):
           st.session_state.my_trades[row["Aktie"]] = {"status": "Offen"}
+          save_trades(st.session_state.my_trades)
           st.rerun()
