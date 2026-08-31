@@ -5,6 +5,7 @@ import urllib.parse
 import pandas as pd
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 import yfinance as yf
 
 st.set_page_config(
@@ -82,7 +83,7 @@ def get_google_link(ticker):
 # ---------------------------------------------------------
 # 1. DATEN LADEN & ANALYSIEREN
 # ---------------------------------------------------------
-@st.cache_data(ttl=900)
+@st.cache_data(ttl=1800)
 def load_screener_data():
   url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
   headers = {
@@ -98,11 +99,9 @@ def load_screener_data():
       ".", "-", regex=False
   )
 
-  # Map: Kürzel -> Firmenname
   company_names = dict(
       zip(sp500_df["Symbol_Clean"], sp500_df["Security"])
   )
-
   symbols = sp500_df["Symbol_Clean"].tolist()
 
   raw_data = yf.download(
@@ -271,11 +270,33 @@ if df_setups.empty:
 else:
   available_setups = df_setups[~df_setups["Aktie"].isin(user_trades.keys())]
 
-  # Live-Suchfeld
-  search_query = st.text_input(
-      "🔍 Live-Suche (Kürzel oder Firmenname):",
-      placeholder="Einfach tippen... z.B. AAPL oder Apple (Leer lassen für alle Aktien)",
-  ).strip()
+  # ECHTZET-SUCHFELD (TradingView-Style per JavaScript)
+  components.html(
+      """
+    <div style="font-family: sans-serif; margin-bottom: 5px;">
+        <label style="font-size: 14px; font-weight: bold; color: #31333F;">🔍 Echtzeit-Suche (Kürzel oder Name):</label>
+        <input type="text" id="liveSearchInput" placeholder="Tippen zum Suchen (z.B. AAPL, Apple)..." 
+               style="width: 100%; padding: 10px; margin-top: 5px; border-radius: 8px; border: 1px solid #ccc; font-size: 15px; box-sizing: border-box;"
+               oninput="filterCards()">
+    </div>
+    <script>
+    function filterCards() {
+        var input = document.getElementById('liveSearchInput').value.toLowerCase();
+        var cards = parent.document.querySelectorAll('.stock-card-box');
+        
+        cards.forEach(function(card) {
+            var searchData = card.getAttribute('data-search') || '';
+            if (searchData.includes(input)) {
+                card.style.display = 'block';
+            } else {
+                card.style.display = 'none';
+            }
+        });
+    }
+    </script>
+    """,
+      height=75,
+  )
 
   f_col1, f_col2, f_col3, f_col4 = st.columns(4)
 
@@ -322,14 +343,6 @@ else:
   if only_red_ema:
     filtered_df = filtered_df[filtered_df["Has Red EMA"] == True]
 
-  # Direct/Live-Suchfeld-Filter
-  if search_query != "":
-    q = search_query.lower()
-    filtered_df = filtered_df[
-        filtered_df["Aktie"].str.lower().str.contains(q, na=False)
-        | filtered_df["Name"].str.lower().str.contains(q, na=False)
-    ]
-
   st.write(
       f"Gefundene Setups (sortiert nach EMA-Nähe): **{len(filtered_df)}**"
   )
@@ -342,7 +355,15 @@ else:
     comp_name = row["Name"]
     link = get_google_link(sym)
 
+    search_key = f"{sym.lower()} {comp_name.lower()}"
+
     with col:
+      # HTML Wrapper für den Echtzeit-Filter
+      st.markdown(
+          f'<div class="stock-card-box" data-search="{search_key}">',
+          unsafe_allow_html=True,
+      )
+
       with st.container(border=True):
         # 1. Kleiner grauer Firmenname + Titel mit Kürzel & Link
         st.markdown(
@@ -389,3 +410,5 @@ else:
           all_trades[current_user][sym] = {"status": "Offen"}
           save_all_trades(all_trades)
           st.rerun()
+
+      st.markdown("</div>", unsafe_allow_html=True)
