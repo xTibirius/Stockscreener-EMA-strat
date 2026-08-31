@@ -11,33 +11,59 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------
-# DAUERHAFTES SPEICHERN (JSON-Datei auf der Festplatte)
+# DAUERHAFTES SPEICHERN (Multi-User JSON)
 # ---------------------------------------------------------
 TRADES_FILE = "trades.json"
 
 
-def load_saved_trades():
-  """Lädt die gespeicherten Trades aus der JSON-Datei."""
+def load_all_trades():
+  """Lädt das Gesamtwörterbuch mit den Trades aller Nutzer."""
   if os.path.exists(TRADES_FILE):
     try:
       with open(TRADES_FILE, "r") as f:
-        return json.load(f)
+        data = json.load(f)
+        if isinstance(data, dict):
+          return data
     except Exception:
       return {}
   return {}
 
 
-def save_trades(trades_dict):
-  """Speichert die Trades dauerhaft in der JSON-Datei."""
+def save_all_trades(all_trades_dict):
+  """Speichert die Trades aller Nutzer in der JSON-Datei."""
   with open(TRADES_FILE, "w") as f:
-    json.dump(trades_dict, f, indent=4)
+    json.dump(all_trades_dict, f, indent=4)
 
 
-# Beim Start die gespeicherten Trades laden
-if "my_trades" not in st.session_state:
-  st.session_state.my_trades = load_saved_trades()
+# ---------------------------------------------------------
+# BENUTZER-AUSWAHL (SIDEBAR / KOPFZEILE)
+# ---------------------------------------------------------
+st.sidebar.title("👤 Nutzer-Profil")
 
-st.title("📈 S&P 500 Live Screener & Trade Manager")
+# Vordefinierte Nutzer oder eigenen Namen eingeben
+USER_LIST = ["Alex", "Marco", "Lisa", "➕ Neuer Nutzer..."]
+selected_user_option = st.sidebar.selectbox("Wähle dein Profil:", USER_LIST)
+
+if selected_user_option == "➕ Neuer Nutzer...":
+  current_user = st.sidebar.text_input(
+      "Dein Name:", placeholder="z.B. Thomas"
+  ).strip()
+  if not current_user:
+    st.info("👈 Bitte wähle links dein Profil aus oder gib deinen Namen ein.")
+    st.stop()
+else:
+  current_user = selected_user_option
+
+st.sidebar.success(f"Angemeldet als: **{current_user}**")
+
+# Alle Trades laden & Trades für den aktuellen Nutzer abrufen
+all_trades = load_all_trades()
+if current_user not in all_trades:
+  all_trades[current_user] = {}
+
+user_trades = all_trades[current_user]
+
+st.title(f"📈 S&P 500 Trading Hub — ({current_user})")
 
 
 # ---------------------------------------------------------
@@ -143,7 +169,6 @@ def load_screener_data():
     })
 
   df = pd.DataFrame(results)
-  # Nach der Nähe zur 10 EMA sortieren (kleinster Abstand zuerst)
   if not df.empty:
     df = df.sort_values(by="Dist EMA10 %", ascending=True)
 
@@ -153,14 +178,14 @@ def load_screener_data():
 df_setups, close_w, ema21, ema10 = load_screener_data()
 
 # ---------------------------------------------------------
-# SEKTION 1: MEINE GENOMMENEN TRADES (TRACKER & GEWINNE)
+# SEKTION 1: MEINE GENOMMENEN TRADES (NUR FÜR NUTZER)
 # ---------------------------------------------------------
-st.subheader("🎯 Meine aktiven Trades")
+st.subheader(f"🎯 Aktive Trades von {current_user}")
 
-if len(st.session_state.my_trades) == 0:
+if len(user_trades) == 0:
   st.info("Noch keine Trades markiert. Wählen Sie unten ein Setup aus!")
 else:
-  for sym, info in list(st.session_state.my_trades.items()):
+  for sym, info in list(user_trades.items()):
     curr_price = close_w[sym].iloc[-1]
     curr_e21 = ema21[sym].iloc[-1]
 
@@ -191,37 +216,35 @@ else:
 
       # Buttons für Gewinnmitnahme
       if c4.button("50% Gewinn genommen", key=f"tp50_{sym}"):
-        st.session_state.my_trades[sym]["status"] = "💰 50% Gewinn gesichert"
-        save_trades(st.session_state.my_trades)
+        all_trades[current_user][sym]["status"] = "💰 50% Gewinn gesichert"
+        save_all_trades(all_trades)
         st.rerun()
 
       if c4.button("90% Gewinn genommen", key=f"tp90_{sym}"):
-        st.session_state.my_trades[sym]["status"] = (
+        all_trades[current_user][sym]["status"] = (
             "🚀 90% Gewinn gesichert (Rest läuft)"
         )
-        save_trades(st.session_state.my_trades)
+        save_all_trades(all_trades)
         st.rerun()
 
       # Button zum Entfernen aus der Liste
       if c5.button("🗑️ Schließen", key=f"remove_{sym}", use_container_width=True):
-        del st.session_state.my_trades[sym]
-        save_trades(st.session_state.my_trades)
+        del all_trades[current_user][sym]
+        save_all_trades(all_trades)
         st.rerun()
 
 st.divider()
 
 # ---------------------------------------------------------
-# SEKTION 2: FILTER & NEUE SETUPS (KÄSTEN-GRID)
+# SEKTION 2: FILTER & NEUE SETUPS
 # ---------------------------------------------------------
 st.subheader("🔍 Aktuelle Markt-Setups (S&P 500)")
 
 if df_setups.empty:
   st.write("Aktuell keine aktiven Setups vorhanden.")
 else:
-  # Trades, die bereits im Portfolio sind, ausfiltern
-  available_setups = df_setups[
-      ~df_setups["Aktie"].isin(st.session_state.my_trades.keys())
-  ]
+  # Trades, die DIESER Nutzer im Portfolio hat, ausfiltern
+  available_setups = df_setups[~df_setups["Aktie"].isin(user_trades.keys())]
 
   # Checkbox-Filterleiste
   f_col1, f_col2, f_col3 = st.columns(3)
@@ -286,7 +309,7 @@ else:
             f" :{ema21_color}[${row['EMA 21']}]"
         )
 
-        # 4. Status der Position (In Ordnung / Fast / Invalidiert)
+        # 4. Status der Position
         st.markdown(
             f"Position Status:"
             f" :{row['Health Color']}[**{row['Health Status']}**]"
@@ -298,6 +321,6 @@ else:
         if st.button(
             "Trade genommen", key=f"btn_{row['Aktie']}", use_container_width=True
         ):
-          st.session_state.my_trades[row["Aktie"]] = {"status": "Offen"}
-          save_trades(st.session_state.my_trades)
+          all_trades[current_user][row["Aktie"]] = {"status": "Offen"}
+          save_all_trades(all_trades)
           st.rerun()
