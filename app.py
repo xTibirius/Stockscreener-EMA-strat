@@ -36,7 +36,6 @@ def save_all_trades(all_trades_dict):
     json.dump(all_trades_dict, f, indent=4)
 
 
-# Alle bisher gespeicherten Trades und Nutzer laden
 all_trades = load_all_trades()
 
 # ---------------------------------------------------------
@@ -44,7 +43,6 @@ all_trades = load_all_trades()
 # ---------------------------------------------------------
 st.sidebar.title("👤 Nutzer-Profil")
 
-# Nutzerliste dynamisch aus den bisher gespeicherten Nutzern generieren
 existing_users = sorted(list(all_trades.keys()))
 user_options = existing_users + ["➕ Neuer Nutzer..."]
 
@@ -94,7 +92,18 @@ def load_screener_data():
   }
   response = requests.get(url, headers=headers)
   tables = pd.read_html(StringIO(response.text), flavor="html5lib")
-  symbols = tables[0]["Symbol"].str.replace(".", "-", regex=False).tolist()
+
+  sp500_df = tables[0]
+  sp500_df["Symbol_Clean"] = sp500_df["Symbol"].str.replace(
+      ".", "-", regex=False
+  )
+
+  # Map: Kürzel -> Firmenname
+  company_names = dict(
+      zip(sp500_df["Symbol_Clean"], sp500_df["Security"])
+  )
+
+  symbols = sp500_df["Symbol_Clean"].tolist()
 
   raw_data = yf.download(
       symbols, period="1y", interval="1d", group_by="column", auto_adjust=True
@@ -164,8 +173,11 @@ def load_screener_data():
       health_status = "✅ IN ORDNUNG"
       health_color = "green"
 
+    comp_name = company_names.get(sym, sym)
+
     results.append({
         "Aktie": sym,
+        "Name": comp_name,
         "Status": status,
         "Typ": typ,
         "Kurs": round(c_price, 2),
@@ -182,10 +194,10 @@ def load_screener_data():
   if not df.empty:
     df = df.sort_values(by="Dist EMA10 %", ascending=True)
 
-  return df, close_w, ema21, ema10
+  return df, close_w, ema21, ema10, company_names
 
 
-df_setups, close_w, ema21, ema10 = load_screener_data()
+df_setups, close_w, ema21, ema10, company_names = load_screener_data()
 
 # ---------------------------------------------------------
 # SEKTION 1: MEINE GENOMMENEN TRADES (NUR FÜR NUTZER)
@@ -210,11 +222,17 @@ else:
       health_color = "green"
 
     link = get_google_link(sym)
+    comp_name = company_names.get(sym, sym)
 
     with st.container(border=True):
       c1, c2, c3, c4, c5 = st.columns([1.5, 2.5, 2, 2.5, 1.5])
 
+      c1.markdown(
+          f"<span style='color:gray; font-size:12px;'>{comp_name}</span>",
+          unsafe_allow_html=True,
+      )
       c1.markdown(f"### **[{sym}]({link})**")
+
       c2.markdown(
           f"Status: :{health_color}[**{health}**]\n\n*Profit-Status:*"
           f" **{info['status']}**"
@@ -253,7 +271,13 @@ if df_setups.empty:
 else:
   available_setups = df_setups[~df_setups["Aktie"].isin(user_trades.keys())]
 
-  f_col1, f_col2, f_col3 = st.columns(3)
+  # --- SUCH- UND FILTERLEISTE ---
+  search_query = st.text_input(
+      "🔍 Einzelaktie suchen (Kürzel oder Firmenname):",
+      placeholder="z.B. AAPL oder Apple...",
+  ).strip()
+
+  f_col1, f_col2, f_col3, f_col4 = st.columns(4)
 
   with f_col1:
     show_bereit = st.checkbox("🚀 BEREIT anzeigen", value=True)
@@ -262,10 +286,19 @@ else:
     show_fast_bereit = st.checkbox("⚠️ FAST BEREIT anzeigen", value=True)
 
   with f_col3:
-    only_red_ema = st.checkbox("Nur mit mind. 1 roten EMA")
+    show_in_ordnung = st.checkbox("✅ IN ORDNUNG anzeigen", value=True)
 
+  with f_col4:
+    show_fast_invalidiert = st.checkbox(
+        "⚠️ FAST INVALIDIERT anzeigen", value=True
+    )
+
+  only_red_ema = st.checkbox("Nur mit mind. 1 roten EMA")
+
+  # --- FILTER ANWENDEN ---
   filtered_df = available_setups.copy()
 
+  # Setup-Status Filter
   selected_statuses = []
   if show_bereit:
     selected_statuses.append("BEREIT")
@@ -274,8 +307,28 @@ else:
 
   filtered_df = filtered_df[filtered_df["Status"].isin(selected_statuses)]
 
+  # Position Health Status Filter
+  selected_health = []
+  if show_in_ordnung:
+    selected_health.append("✅ IN ORDNUNG")
+  if show_fast_invalidiert:
+    selected_health.append("⚠️ FAST INVALIDIERT")
+
+  filtered_df = filtered_df[
+      filtered_df["Health Status"].isin(selected_health)
+  ]
+
+  # Red EMA Filter
   if only_red_ema:
     filtered_df = filtered_df[filtered_df["Has Red EMA"] == True]
+
+  # Suchfeld-Filter (Kürzel oder Name)
+  if search_query:
+    query_lower = search_query.lower()
+    filtered_df = filtered_df[
+        filtered_df["Aktie"].str.lower().str.contains(query_lower)
+        | filtered_df["Name"].str.lower().str.contains(query_lower)
+    ]
 
   st.write(
       f"Gefundene Setups (sortiert nach EMA-Nähe): **{len(filtered_df)}**"
@@ -286,11 +339,17 @@ else:
   for idx, (_, row) in enumerate(filtered_df.iterrows()):
     col = cols[idx % 3]
     sym = row["Aktie"]
+    comp_name = row["Name"]
     link = get_google_link(sym)
 
     with col:
       with st.container(border=True):
-        # 1. Titel mit Google-Link auf dem Kürzel
+        # 1. Kleiner grauer Firmenname + Titel mit Kürzel & Link
+        st.markdown(
+            f"<span style='color:gray; font-size:12px;'>{comp_name}</span>",
+            unsafe_allow_html=True,
+        )
+
         if row["Status"] == "BEREIT":
           status_tag = ":green[🚀 **BEREIT**]"
         else:
