@@ -107,8 +107,12 @@ def load_screener_data():
       symbols, period="1y", interval="1d", group_by="column", auto_adjust=True
   )
 
-  close_w = raw_data["Close"].dropna(how="all", axis=1).resample("W").last()
+  close_d = raw_data["Close"].dropna(how="all", axis=1)
+  close_w = close_d.resample("W").last()
   low_w = raw_data["Low"].dropna(how="all", axis=1).resample("W").min()
+
+  # Berechne Tages-Performance in %
+  daily_change_pct = close_d.pct_change().iloc[-1] * 100.0
 
   ema10 = close_w.ewm(span=10, adjust=False).mean()
   ema21 = close_w.ewm(span=21, adjust=False).mean()
@@ -172,6 +176,7 @@ def load_screener_data():
       health_color = "green"
 
     comp_name = company_names.get(sym, sym)
+    d_change = round(daily_change_pct.get(sym, 0.0), 2)
 
     results.append({
         "Aktie": sym,
@@ -179,6 +184,7 @@ def load_screener_data():
         "Status": status,
         "Typ": typ,
         "Kurs": round(c_price, 2),
+        "DailyChange": d_change,
         "EMA 10": round(e10, 2),
         "EMA 21": round(e21, 2),
         "EMA Diff %": round(ema_diff_pct, 2),
@@ -192,10 +198,17 @@ def load_screener_data():
   if not df.empty:
     df = df.sort_values(by="Dist EMA10 %", ascending=True)
 
-  return df, close_w, ema21, ema10, company_names
+  return df, close_w, ema10, ema21, company_names, daily_change_pct
 
 
-df_setups, close_w, ema21, ema10, company_names = load_screener_data()
+(
+    df_setups,
+    close_w,
+    ema10_df,
+    ema21_df,
+    company_names,
+    daily_change_pct,
+) = load_screener_data()
 
 # ---------------------------------------------------------
 # SEKTION 1: MEINE GENOMMENEN TRADES (NUR FÜR NUTZER)
@@ -207,8 +220,10 @@ if len(user_trades) == 0:
 else:
   for sym, info in list(user_trades.items()):
     curr_price = close_w[sym].iloc[-1]
-    curr_e21 = ema21[sym].iloc[-1]
+    curr_e10 = ema10_df[sym].iloc[-1]
+    curr_e21 = ema21_df[sym].iloc[-1]
 
+    # Health Status für Position
     if curr_price < curr_e21:
       health = "❌ INVALIDIERT (SL Greift!)"
       health_color = "red"
@@ -219,11 +234,27 @@ else:
       health = "✅ IN ORDNUNG (Im Trend)"
       health_color = "green"
 
+    # EMA 10 Farbe: Grün wenn Kurs > 10 EMA, sonst Rot
+    ema10_color = "green" if curr_price > curr_e10 else "red"
+
+    # EMA 21 Farbe: Grün wenn Kurs > 10 EMA | Orange wenn Kurs unter 10 EMA aber > 21 EMA | Rot wenn Kurs < 21 EMA
+    if curr_price > curr_e10:
+      ema21_color = "green"
+    elif curr_price < curr_e21:
+      ema21_color = "red"
+    else:
+      ema21_color = "orange"
+
+    # Tages-Performance
+    d_change = round(daily_change_pct.get(sym, 0.0), 2)
+    change_color = "green" if d_change >= 0 else "red"
+    change_sign = "+" if d_change >= 0 else ""
+
     link = get_google_link(sym)
     comp_name = company_names.get(sym, sym)
 
     with st.container(border=True):
-      c1, c2, c3, c4, c5 = st.columns([1.5, 2.5, 2, 2.5, 1.5])
+      c1, c2, c3, c4, c5 = st.columns([1.5, 2.5, 2.5, 2.5, 1.5])
 
       c1.markdown(
           f"<span style='color:gray; font-size:12px;'>{comp_name}</span>",
@@ -235,9 +266,12 @@ else:
           f"Status: :{health_color}[**{health}**]\n\n*Profit-Status:*"
           f" **{info['status']}**"
       )
+
       c3.markdown(
-          f"**Kurs:** ${round(curr_price, 2)}\n\n**21 EMA:**"
-          f" ${round(curr_e21, 2)}"
+          f"**Kurs:** ${round(curr_price, 2)} ("
+          f":{change_color}[**{change_sign}{d_change}%**])\n\n"
+          f"**10 EMA:** :{ema10_color}[${round(curr_e10, 2)}] | **21 EMA:**"
+          f" :{ema21_color}[${round(curr_e21, 2)}]"
       )
 
       if c4.button("50% Gewinn genommen", key=f"tp50_{sym}"):
@@ -340,6 +374,10 @@ else:
     comp_name = row["Name"]
     link = get_google_link(sym)
 
+    d_change = row["DailyChange"]
+    change_color = "green" if d_change >= 0 else "red"
+    change_sign = "+" if d_change >= 0 else ""
+
     with col:
       with st.container(border=True):
         # 1. Kleiner grauer Firmenname + Titel mit Kürzel & Link
@@ -356,15 +394,20 @@ else:
         st.markdown(f"### **[{sym}]({link}) — {status_tag}**")
         st.caption(f"Setup: {row['Typ']}")
 
-        # 2. Preis & EMA Differenz in %
+        # 2. Preis & Tages performance & EMA Differenz in %
         st.markdown(
-            f"**Preis:** `${row['Kurs']}` | **EMA-Diff:**"
-            f" `{row['EMA Diff %']}%`"
+            f"**Preis:** `${row['Kurs']}` (:{change_color}[**{change_sign}{d_change}%**])"
+            f" | **EMA-Diff:** `{row['EMA Diff %']}%`"
         )
 
-        # 3. EMA Farben ermitteln
+        # 3. EMA Farben ermitteln (Für Markt-Setups)
         ema10_color = "green" if row["Kurs"] > row["EMA 10"] else "red"
-        ema21_color = "green" if row["Kurs"] > row["EMA 21"] else "red"
+        if row["Kurs"] > row["EMA 10"]:
+          ema21_color = "green"
+        elif row["Kurs"] < row["EMA 21"]:
+          ema21_color = "red"
+        else:
+          ema21_color = "orange"
 
         # EMA-Werte anzeigen
         st.markdown(
