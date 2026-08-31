@@ -271,10 +271,10 @@ if df_setups.empty:
 else:
   available_setups = df_setups[~df_setups["Aktie"].isin(user_trades.keys())]
 
-  # --- SUCH- UND FILTERLEISTE ---
+  # Live-Suchfeld
   search_query = st.text_input(
-      "🔍 Einzelaktie suchen (Kürzel oder Firmenname):",
-      placeholder="z.B. AAPL oder Apple...",
+      "🔍 Live-Suche (Kürzel oder Firmenname):",
+      placeholder="Einfach tippen... z.B. AAPL oder Apple (Leer lassen für alle Aktien)",
   ).strip()
 
   f_col1, f_col2, f_col3, f_col4 = st.columns(4)
@@ -322,12 +322,12 @@ else:
   if only_red_ema:
     filtered_df = filtered_df[filtered_df["Has Red EMA"] == True]
 
-  # Suchfeld-Filter (Kürzel oder Name)
-  if search_query:
-    query_lower = search_query.lower()
+  # Direct/Live-Suchfeld-Filter
+  if search_query != "":
+    q = search_query.lower()
     filtered_df = filtered_df[
-        filtered_df["Aktie"].str.lower().str.contains(query_lower)
-        | filtered_df["Name"].str.lower().str.contains(query_lower)
+        filtered_df["Aktie"].str.lower().str.contains(q, na=False)
+        | filtered_df["Name"].str.lower().str.contains(q, na=False)
     ]
 
   st.write(
