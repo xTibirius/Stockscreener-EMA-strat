@@ -8,7 +8,7 @@ st.set_page_config(
     page_title="S&P 500 Trading Hub", page_icon="📈", layout="wide"
 )
 
-# Speicher für aktive Trades im Browser-Sitzungsspeicher (Session State)
+# Speicher für aktive Trades im Sitzungsspeicher (Session State)
 if "my_trades" not in st.session_state:
   st.session_state.my_trades = []
 
@@ -55,32 +55,44 @@ def load_screener_data():
 
     macd_ok = (m_hist > 0) or (m_hist > m_hist_prev)
     crossover_now = (e10_prev <= e21_prev) and (e10 > e21)
+    trend_ok = e10 > e21
+
     enter_fall1 = crossover_now and macd_ok
-    enter_fall2 = (
-        (e10 > e21) and (l_price <= e10) and macd_ok and (not crossover_now)
+    enter_fall2 = trend_ok and (l_price <= e10) and macd_ok and (not crossover_now)
+
+    near_retest = trend_ok and (l_price <= e10 * 1.02) and (l_price > e10)
+    near_crossover = (
+        (e10 < e21) and (e10 / e21 > 0.985) and (m_hist > m_hist_prev)
     )
 
     if enter_fall1:
-      results.append({
-          "Aktie": sym,
-          "Status": "🚀 ENTER",
-          "Typ": "Fall 1 (Crossover)",
-          "Kurs": round(c_price, 2),
-          "21 EMA": round(e21, 2),
-      })
+      status = "BEREIT"
+      typ = "Fall 1 (Crossover)"
     elif enter_fall2:
-      results.append({
-          "Aktie": sym,
-          "Status": "🚀 ENTER",
-          "Typ": "Fall 2 (Retest)",
-          "Kurs": round(c_price, 2),
-          "21 EMA": round(e21, 2),
-      })
+      status = "BEREIT"
+      typ = "Fall 2 (Retest)"
+    elif near_retest:
+      status = "FAST BEREIT"
+      typ = "Fall 2 (Retest nah)"
+    elif near_crossover:
+      status = "FAST BEREIT"
+      typ = "Fall 1 (Cross nah)"
+    else:
+      continue
 
-  return pd.DataFrame(results), close_w, ema21
+    results.append({
+        "Aktie": sym,
+        "Status": status,
+        "Typ": typ,
+        "Kurs": round(c_price, 2),
+        "EMA 10": round(e10, 2),
+        "EMA 21": round(e21, 2),
+    })
+
+  return pd.DataFrame(results), close_w, ema21, ema10
 
 
-df_setups, close_w, ema21 = load_screener_data()
+df_setups, close_w, ema21, ema10 = load_screener_data()
 
 # ==========================================
 # SEKTION 1: MEINE GENOMMENEN TRADES (TRACKER)
@@ -95,7 +107,6 @@ else:
     curr_price = close_w[sym].iloc[-1]
     curr_e21 = ema21[sym].iloc[-1]
 
-    # Überprüfung auf Invalidierung
     if curr_price < curr_e21:
       health = "❌ INVALIDIERT (SL Greift!)"
     elif curr_price <= curr_e21 * 1.02:
@@ -105,8 +116,8 @@ else:
 
     trade_data.append({
         "Aktie": sym,
-        "Aktueller Kurs": round(curr_price, 2),
-        "21 EMA (Stopp)": round(curr_e21, 2),
+        "Aktueller Kurs": f"${round(curr_price, 2)}",
+        "21 EMA (Stopp)": f"${round(curr_e21, 2)}",
         "Trade Status": health,
     })
 
@@ -115,26 +126,56 @@ else:
 st.divider()
 
 # ==========================================
-# SEKTION 2: NEUE SETUPS & ENTRY-BUTTONS
+# SEKTION 2: NEUE SETUPS (KÄSTEN-GRID)
 # ==========================================
 st.subheader("🔍 Aktuelle Markt-Setups (S&P 500)")
 
 if df_setups.empty:
-  st.write("Aktuell keine neuen Setups vorhanden.")
+  st.write("Aktuell keine aktiven Setups vorhanden.")
 else:
-  for idx, row in df_setups.iterrows():
-    col1, col2, col3, col4, col5 = st.columns([1, 2, 2, 2, 2])
-    col1.write(f"**{row['Aktie']}**")
-    col2.write(f"{row['Status']} ({row['Typ']})")
-    col3.write(f"Kurs: ${row['Kurs']}")
-    col4.write(f"21 EMA: ${row['21 EMA']}")
+  # 3 Kästen pro Zeile anzeigen
+  cols = st.columns(3)
 
-    # Button zum Hinzufügen des Trades
-    already_taken = row["Aktie"] in st.session_state.my_trades
-    if col5.button(
-        "Trade genommen" if not already_taken else "Im Portfolio",
-        key=row["Aktie"],
-        disabled=already_taken,
-    ):
-      st.session_state.my_trades.append(row["Aktie"])
-      st.rerun()
+  for idx, row in df_setups.iterrows():
+    col = cols[idx % 3]
+
+    with col:
+      # Kasten (Container) erstellen
+      with st.container(border=True):
+        # 1. Obere Zeile: Fett Name + Status
+        st.markdown(f"### **{row['Aktie']} — {row['Status']}**")
+        st.caption(f"Setup: {row['Typ']}")
+
+        # 2. Zweite Zeile: Aktueller Preis
+        st.markdown(f"**Preis:** `${row['Kurs']}`")
+
+        # 3. Farb-Logik für EMA 10
+        if row["Kurs"] > row["EMA 10"]:
+          ema10_color = "green"
+        else:
+          ema10_color = "red"
+
+        # 4. Farb-Logik für EMA 21
+        if row["Kurs"] > row["EMA 21"]:
+          ema21_color = "green"
+        else:
+          ema21_color = "red"
+
+        # EMA-Werte mit Farbcodierung anzeigen
+        st.markdown(
+            f"**10 EMA:** :{ema10_color}[${row['EMA 10']}] | **21 EMA:**"
+            f" :{ema21_color}[${row['EMA 21']}]"
+        )
+
+        st.markdown("---")
+
+        # 5. Untere Zeile: Button "Trade genommen"
+        already_taken = row["Aktie"] in st.session_state.my_trades
+        if st.button(
+            "Trade genommen" if not already_taken else "Im Portfolio",
+            key=f"btn_{row['Aktie']}",
+            disabled=already_taken,
+            use_container_width=True,
+        ):
+          st.session_state.my_trades.append(row["Aktie"])
+          st.rerun()
