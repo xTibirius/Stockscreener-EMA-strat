@@ -109,8 +109,24 @@ def load_screener_data():
     else:
       continue
 
-    ema_diff = abs(e10 - e21)
+    # EMA-Differenz in Prozent (%)
+    ema_diff_pct = (abs(e10 - e21) / e21) * 100.0
+
+    # Abstand des Kurses zur 10 EMA in Prozent (für Sortierung)
+    dist_to_ema10_pct = abs(c_price - e10) / e10 * 100.0
+
     has_red_ema = (c_price < e10) or (c_price < e21)
+
+    # Status-Beurteilung für den Kasten
+    if c_price < e21:
+      health_status = "❌ INVALIDIERT"
+      health_color = "red"
+    elif c_price <= e21 * 1.02:
+      health_status = "⚠️ FAST INVALIDIERT"
+      health_color = "orange"
+    else:
+      health_status = "✅ IN ORDNUNG"
+      health_color = "green"
 
     results.append({
         "Aktie": sym,
@@ -119,11 +135,19 @@ def load_screener_data():
         "Kurs": round(c_price, 2),
         "EMA 10": round(e10, 2),
         "EMA 21": round(e21, 2),
-        "EMA Differenz": round(ema_diff, 2),
+        "EMA Diff %": round(ema_diff_pct, 2),
+        "Dist EMA10 %": dist_to_ema10_pct,
         "Has Red EMA": has_red_ema,
+        "Health Status": health_status,
+        "Health Color": health_color,
     })
 
-  return pd.DataFrame(results), close_w, ema21, ema10
+  df = pd.DataFrame(results)
+  # Nach der Nähe zur 10 EMA sortieren (kleinster Abstand zuerst)
+  if not df.empty:
+    df = df.sort_values(by="Dist EMA10 %", ascending=True)
+
+  return df, close_w, ema21, ema10
 
 
 df_setups, close_w, ema21, ema10 = load_screener_data()
@@ -194,7 +218,12 @@ st.subheader("🔍 Aktuelle Markt-Setups (S&P 500)")
 if df_setups.empty:
   st.write("Aktuell keine aktiven Setups vorhanden.")
 else:
-  # Einheitliche Checkbox-Filterleiste
+  # Trades, die bereits im Portfolio sind, ausfiltern
+  available_setups = df_setups[
+      ~df_setups["Aktie"].isin(st.session_state.my_trades.keys())
+  ]
+
+  # Checkbox-Filterleiste
   f_col1, f_col2, f_col3 = st.columns(3)
 
   with f_col1:
@@ -207,9 +236,8 @@ else:
     only_red_ema = st.checkbox("Nur mit mind. 1 roten EMA")
 
   # Filter anwenden
-  filtered_df = df_setups.copy()
+  filtered_df = available_setups.copy()
 
-  # Status Filter-Logik
   selected_statuses = []
   if show_bereit:
     selected_statuses.append("BEREIT")
@@ -218,11 +246,12 @@ else:
 
   filtered_df = filtered_df[filtered_df["Status"].isin(selected_statuses)]
 
-  # EMA Filter-Logik
   if only_red_ema:
     filtered_df = filtered_df[filtered_df["Has Red EMA"] == True]
 
-  st.write(f"Gefundene Setups: **{len(filtered_df)}**")
+  st.write(
+      f"Gefundene Setups (sortiert nach EMA-Nähe): **{len(filtered_df)}**"
+  )
 
   # 3 Kästen pro Zeile anzeigen
   cols = st.columns(3)
@@ -241,10 +270,10 @@ else:
         st.markdown(title_html)
         st.caption(f"Setup: {row['Typ']}")
 
-        # 2. Preis & EMA Differenz
+        # 2. Preis & EMA Differenz in %
         st.markdown(
             f"**Preis:** `${row['Kurs']}` | **EMA-Diff:**"
-            f" `${row['EMA Differenz']}`"
+            f" `{row['EMA Diff %']}%`"
         )
 
         # 3. EMA Farben ermitteln
@@ -257,15 +286,17 @@ else:
             f" :{ema21_color}[${row['EMA 21']}]"
         )
 
+        # 4. Status der Position (In Ordnung / Fast / Invalidiert)
+        st.markdown(
+            f"Position Status:"
+            f" :{row['Health Color']}[**{row['Health Status']}**]"
+        )
+
         st.markdown("---")
 
-        # 4. Button "Trade genommen"
-        already_taken = row["Aktie"] in st.session_state.my_trades
+        # 5. Button "Trade genommen"
         if st.button(
-            "Trade genommen" if not already_taken else "Im Portfolio",
-            key=f"btn_{row['Aktie']}",
-            disabled=already_taken,
-            use_container_width=True,
+            "Trade genommen", key=f"btn_{row['Aktie']}", use_container_width=True
         ):
           st.session_state.my_trades[row["Aktie"]] = {"status": "Offen"}
           save_trades(st.session_state.my_trades)
