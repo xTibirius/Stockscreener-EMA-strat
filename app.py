@@ -1,6 +1,7 @@
 from io import StringIO
 import json
 import os
+import urllib.parse
 import pandas as pd
 import requests
 import streamlit as st
@@ -11,7 +12,7 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------
-# DAUERHAFTES SPEICHERN (Multi-User JSON)
+# DAUERHAFTES SPEICHERN (Multi-User & User-Liste in JSON)
 # ---------------------------------------------------------
 TRADES_FILE = "trades.json"
 
@@ -35,41 +36,55 @@ def save_all_trades(all_trades_dict):
     json.dump(all_trades_dict, f, indent=4)
 
 
+# Alle bisher gespeicherten Trades und Nutzer laden
+all_trades = load_all_trades()
+
 # ---------------------------------------------------------
-# BENUTZER-AUSWAHL (SIDEBAR / KOPFZEILE)
+# BENUTZER-AUSWAHL (SIDEBAR)
 # ---------------------------------------------------------
 st.sidebar.title("👤 Nutzer-Profil")
 
-# Vordefinierte Nutzer oder eigenen Namen eingeben
-USER_LIST = ["Alex", "Marco", "Lisa", "➕ Neuer Nutzer..."]
-selected_user_option = st.sidebar.selectbox("Wähle dein Profil:", USER_LIST)
+# Nutzerliste dynamisch aus den bisher gespeicherten Nutzern generieren
+existing_users = sorted(list(all_trades.keys()))
+user_options = existing_users + ["➕ Neuer Nutzer..."]
+
+selected_user_option = st.sidebar.selectbox("Wähle dein Profil:", user_options)
 
 if selected_user_option == "➕ Neuer Nutzer...":
-  current_user = st.sidebar.text_input(
+  new_user_name = st.sidebar.text_input(
       "Dein Name:", placeholder="z.B. Thomas"
   ).strip()
-  if not current_user:
+  if not new_user_name:
     st.info("👈 Bitte wähle links dein Profil aus oder gib deinen Namen ein.")
     st.stop()
+  else:
+    current_user = new_user_name
+    if current_user not in all_trades:
+      all_trades[current_user] = {}
+      save_all_trades(all_trades)
+      st.rerun()
 else:
   current_user = selected_user_option
 
 st.sidebar.success(f"Angemeldet als: **{current_user}**")
 
-# Alle Trades laden & Trades für den aktuellen Nutzer abrufen
-all_trades = load_all_trades()
-if current_user not in all_trades:
-  all_trades[current_user] = {}
-
-user_trades = all_trades[current_user]
+user_trades = all_trades.get(current_user, {})
 
 st.title(f"📈 S&P 500 Trading Hub — ({current_user})")
 
 
 # ---------------------------------------------------------
+# HELPER: GOOGLE SEARCH LINK
+# ---------------------------------------------------------
+def get_google_link(ticker):
+  query = urllib.parse.quote(f"{ticker} stock price")
+  return f"https://www.google.com/search?q={query}"
+
+
+# ---------------------------------------------------------
 # 1. DATEN LADEN & ANALYSIEREN
 # ---------------------------------------------------------
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=900)
 def load_screener_data():
   url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
   headers = {
@@ -135,15 +150,10 @@ def load_screener_data():
     else:
       continue
 
-    # EMA-Differenz in Prozent (%)
     ema_diff_pct = (abs(e10 - e21) / e21) * 100.0
-
-    # Abstand des Kurses zur 10 EMA in Prozent (für Sortierung)
     dist_to_ema10_pct = abs(c_price - e10) / e10 * 100.0
-
     has_red_ema = (c_price < e10) or (c_price < e21)
 
-    # Status-Beurteilung für den Kasten
     if c_price < e21:
       health_status = "❌ INVALIDIERT"
       health_color = "red"
@@ -189,7 +199,6 @@ else:
     curr_price = close_w[sym].iloc[-1]
     curr_e21 = ema21[sym].iloc[-1]
 
-    # Status-Logik
     if curr_price < curr_e21:
       health = "❌ INVALIDIERT (SL Greift!)"
       health_color = "red"
@@ -200,11 +209,12 @@ else:
       health = "✅ IN ORDNUNG (Im Trend)"
       health_color = "green"
 
-    # Zeile im Portfolio bauen
+    link = get_google_link(sym)
+
     with st.container(border=True):
       c1, c2, c3, c4, c5 = st.columns([1.5, 2.5, 2, 2.5, 1.5])
 
-      c1.markdown(f"### **{sym}**")
+      c1.markdown(f"### **[{sym}]({link})**")
       c2.markdown(
           f"Status: :{health_color}[**{health}**]\n\n*Profit-Status:*"
           f" **{info['status']}**"
@@ -214,7 +224,6 @@ else:
           f" ${round(curr_e21, 2)}"
       )
 
-      # Buttons für Gewinnmitnahme
       if c4.button("50% Gewinn genommen", key=f"tp50_{sym}"):
         all_trades[current_user][sym]["status"] = "💰 50% Gewinn gesichert"
         save_all_trades(all_trades)
@@ -227,7 +236,6 @@ else:
         save_all_trades(all_trades)
         st.rerun()
 
-      # Button zum Entfernen aus der Liste
       if c5.button("🗑️ Schließen", key=f"remove_{sym}", use_container_width=True):
         del all_trades[current_user][sym]
         save_all_trades(all_trades)
@@ -243,10 +251,8 @@ st.subheader("🔍 Aktuelle Markt-Setups (S&P 500)")
 if df_setups.empty:
   st.write("Aktuell keine aktiven Setups vorhanden.")
 else:
-  # Trades, die DIESER Nutzer im Portfolio hat, ausfiltern
   available_setups = df_setups[~df_setups["Aktie"].isin(user_trades.keys())]
 
-  # Checkbox-Filterleiste
   f_col1, f_col2, f_col3 = st.columns(3)
 
   with f_col1:
@@ -258,7 +264,6 @@ else:
   with f_col3:
     only_red_ema = st.checkbox("Nur mit mind. 1 roten EMA")
 
-  # Filter anwenden
   filtered_df = available_setups.copy()
 
   selected_statuses = []
@@ -276,21 +281,22 @@ else:
       f"Gefundene Setups (sortiert nach EMA-Nähe): **{len(filtered_df)}**"
   )
 
-  # 3 Kästen pro Zeile anzeigen
   cols = st.columns(3)
 
   for idx, (_, row) in enumerate(filtered_df.iterrows()):
     col = cols[idx % 3]
+    sym = row["Aktie"]
+    link = get_google_link(sym)
 
     with col:
       with st.container(border=True):
-        # 1. Titel mit Emoji & Farbe je nach Status
+        # 1. Titel mit Google-Link auf dem Kürzel
         if row["Status"] == "BEREIT":
-          title_html = f"### **{row['Aktie']} —** :green[🚀 **BEREIT**]"
+          status_tag = ":green[🚀 **BEREIT**]"
         else:
-          title_html = f"### **{row['Aktie']} —** :orange[⚠️ **FAST BEREIT**]"
+          status_tag = ":orange[⚠️ **FAST BEREIT**]"
 
-        st.markdown(title_html)
+        st.markdown(f"### **[{sym}]({link}) — {status_tag}**")
         st.caption(f"Setup: {row['Typ']}")
 
         # 2. Preis & EMA Differenz in %
@@ -319,8 +325,8 @@ else:
 
         # 5. Button "Trade genommen"
         if st.button(
-            "Trade genommen", key=f"btn_{row['Aktie']}", use_container_width=True
+            "Trade genommen", key=f"btn_{sym}", use_container_width=True
         ):
-          all_trades[current_user][row["Aktie"]] = {"status": "Offen"}
+          all_trades[current_user][sym] = {"status": "Offen"}
           save_all_trades(all_trades)
           st.rerun()
