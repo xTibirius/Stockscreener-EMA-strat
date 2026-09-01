@@ -1,6 +1,14 @@
 # =====================================================================
 # S&P 500 & NASDAQ WEEKLY EMA STACK & MACD TRADING HUB PRO
 # =====================================================================
+# Features:
+# - Dynamisches Wikipedia-Scraping (S&P 500 & Nasdaq 100 > 2 Mrd. USD)
+# - Zweistufiger Cache: 24h für Universum, 1h für Marktdaten (Schutz vor API-Sperren)
+# - 2-Stufen-Stop: 21 EMA Wochenschluss (Trend) & Notfall-Stop (-3% Broker-Puffer)
+# - Take-Profits: 20W-Hoch / 1:3 CRV, 52W-Hoch / 1:5 CRV, 50er-Schritte bei ATH
+# - Dynamische EMA-Farblogik in 'Meine Trades'
+# =====================================================================
+
 from datetime import datetime
 from io import StringIO
 import json
@@ -159,17 +167,17 @@ def get_next_50_level(price: float) -> float:
 
 
 # ---------------------------------------------------------------------
-# 5. DATEN-ENGINE: ZWEISTUFIGER CACHE
+# 5. DATEN-ENGINE: ZWEISTUFIGER CACHE MIT DYNAMISCHER TABELLENERKENNUNG
 # ---------------------------------------------------------------------
 @st.cache_data(
     ttl=86400,
     show_spinner="Stufe 1/2: Lade S&P 500 & Nasdaq Universum (> 2 Mrd. $)...",
 )
 def get_qualified_universe(min_market_cap_usd=2_000_000_000):
-    """Lädt S&P 500 und Nasdaq Listen und filtert Werte >= 2 Mrd. USD (24h Cache)."""
+    """Lädt S&P 500 und Nasdaq dynamisch und filtert Werte >= 2 Mrd. USD (24h Cache)."""
     headers = {
         "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
         )
     }
 
@@ -177,54 +185,72 @@ def get_qualified_universe(min_market_cap_usd=2_000_000_000):
     company_sectors = {}
     raw_symbols = []
 
-    # 1. S&P 500 Liste abrufen
+    # 1. S&P 500 Liste dynamisch abrufen
     try:
         sp500_url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-        sp500_res = requests.get(sp500_url, headers=headers)
-        sp500_table = pd.read_html(StringIO(sp500_res.text), flavor="html5lib")[
-            0
-        ]
-        sp500_table["Symbol_Clean"] = (
-            sp500_table["Symbol"]
-            .astype(str)
-            .str.strip()
-            .str.replace(".", "-", regex=False)
-        )
+        sp500_res = requests.get(sp500_url, headers=headers, timeout=15)
+        sp500_tables = pd.read_html(StringIO(sp500_res.text), flavor="html5lib")
 
-        for _, row in sp500_table.iterrows():
-            sym = row["Symbol_Clean"]
-            company_names[sym] = row["Security"]
-            company_sectors[sym] = row["GICS Sector"]
-            raw_symbols.append(sym)
+        for table in sp500_tables:
+            sym_col = next(
+                (col for col in table.columns if str(col).lower() in ["symbol", "ticker"]),
+                None,
+            )
+            sec_col = next(
+                (col for col in table.columns if "security" in str(col).lower() or "company" in str(col).lower()),
+                None,
+            )
+            gics_col = next(
+                (col for col in table.columns if "gics sector" in str(col).lower() or "sector" in str(col).lower()),
+                None,
+            )
+
+            if sym_col and len(table) >= 400:
+                for _, row in table.iterrows():
+                    sym = str(row[sym_col]).strip().replace(".", "-")
+                    if sym and sym != "nan":
+                        company_names[sym] = str(row[sec_col]) if sec_col else sym
+                        company_sectors[sym] = str(row[gics_col]) if gics_col else "Sonstige"
+                        raw_symbols.append(sym)
+                break
     except Exception as e:
         st.warning(f"Hinweis: S&P 500 Liste konnte nicht geladen werden: {e}")
 
-    # 2. Nasdaq-100 Liste abrufen
+    # 2. Nasdaq-100 Liste dynamisch durchsuchen (Behebt den 'Ticker'-Fehler)
     try:
         nasdaq_url = "https://en.wikipedia.org/wiki/Nasdaq-100"
-        nasdaq_res = requests.get(nasdaq_url, headers=headers)
-        nasdaq_table = pd.read_html(
-            StringIO(nasdaq_res.text), flavor="html5lib"
-        )[4]
-        nasdaq_table["Symbol_Clean"] = (
-            nasdaq_table["Ticker"]
-            .astype(str)
-            .str.strip()
-            .str.replace(".", "-", regex=False)
-        )
+        nasdaq_res = requests.get(nasdaq_url, headers=headers, timeout=15)
+        nasdaq_tables = pd.read_html(StringIO(nasdaq_res.text), flavor="html5lib")
 
-        for _, row in nasdaq_table.iterrows():
-            sym = row["Symbol_Clean"]
-            if sym not in company_names:
-                company_names[sym] = row.get("Company", sym)
-                company_sectors[sym] = row.get("GICS Sector", "Technology")
-            raw_symbols.append(sym)
+        for table in nasdaq_tables:
+            sym_col = next(
+                (col for col in table.columns if str(col).lower() in ["ticker", "symbol"]),
+                None,
+            )
+            comp_col = next(
+                (col for col in table.columns if "company" in str(col).lower() or "security" in str(col).lower()),
+                None,
+            )
+            gics_col = next(
+                (col for col in table.columns if "gics sector" in str(col).lower() or "sector" in str(col).lower()),
+                None,
+            )
+
+            if sym_col and len(table) >= 50:
+                for _, row in table.iterrows():
+                    sym = str(row[sym_col]).strip().replace(".", "-")
+                    if sym and sym != "nan":
+                        if sym not in company_names:
+                            company_names[sym] = str(row[comp_col]) if comp_col else sym
+                            company_sectors[sym] = str(row[gics_col]) if gics_col else "Technology"
+                        raw_symbols.append(sym)
+                break
     except Exception as e:
         st.warning(f"Hinweis: Nasdaq Liste konnte nicht geladen werden: {e}")
 
     unique_symbols = sorted(list(set(raw_symbols)))
 
-    # Marktkapitalisierung filtern (>= 2 Mrd. USD)
+    # 3. Marktkapitalisierung filtern (>= 2 Mrd. USD)
     qualified_symbols = []
     for sym in unique_symbols:
         try:
@@ -367,7 +393,7 @@ def load_screener_data():
         entry_min_usd = e10_usd
         entry_max_usd = e10_usd * 1.015
 
-        # 1. BEREIT
+        # 1. BEREIT (Vorwoche mit Körper über 10 EMA geschlossen)
         if prev_body_above_10ema and price_above_ema21 and macd_rising:
             if crossover_event:
                 status = "BEREIT"
@@ -401,9 +427,7 @@ def load_screener_data():
             entry_min_usd = e10_usd
             entry_max_usd = e10_usd * 1.015
 
-        # -------------------------------------------------------------
-        # 2-STUFEN-STOP LOGIK (SOFT INVALIDATION vs. HARD EMERGENCY SL)
-        # -------------------------------------------------------------
+        # 2-Stufen-Stop
         invalidation_usd = e21_usd  # Wochenschluss unter 21 EMA
         emergency_sl_usd = e21_usd * 0.97  # Fester Broker-Stop mit 3% Puffer
         risk_per_share_usd = max(c_usd - emergency_sl_usd, c_usd * 0.02)
