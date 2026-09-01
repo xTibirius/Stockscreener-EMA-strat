@@ -8,6 +8,7 @@
 # - Meine Trades (Tab 2) intelligent sortiert nach Handlungsbedarf mit Aktions-Icons
 # - RS-Score als Standard-Filter, kombinierbar mit Einstiegs-Zonen
 # - Flexibler persönlicher Kaufkurs (€/$) & dynamischer Stop-Loss
+# - NEU: Individuelle Speicherung von Risiko & Depotgröße pro Nutzerprofil!
 # =====================================================================
 
 from datetime import datetime
@@ -65,7 +66,6 @@ div[data-testid="stVerticalBlockBorderWrapper"]:hover {
 # ---------------------------------------------------------------------
 # 2. TOAST BENACHRICHTIGUNGEN & PERSISTENZ
 # ---------------------------------------------------------------------
-# Prüfen, ob eine Benachrichtigung im Speicher liegt, die angezeigt werden soll
 if "toast_msg" in st.session_state and st.session_state.toast_msg:
     st.toast(st.session_state.toast_msg)
     st.session_state.toast_msg = None
@@ -89,7 +89,7 @@ def save_user_data(all_data: dict):
 all_users_data = load_user_data()
 
 # ---------------------------------------------------------------------
-# 3. SIDEBAR: PROFIL & RISIKO-MANAGEMENT
+# 3. SIDEBAR: PROFIL & INDIVIDUELLES RISIKO-MANAGEMENT
 # ---------------------------------------------------------------------
 st.sidebar.title("👤 Profil & Einstellungen")
 
@@ -105,18 +105,36 @@ if selected_user == "➕ Neuer Nutzer...":
     else:
         current_user = new_user
         if current_user not in all_users_data:
-            all_users_data[current_user] = {"trades": {}, "favorites": []}
+            # Neues Profil mit Standard-Einstellungen anlegen
+            all_users_data[current_user] = {
+                "trades": {}, 
+                "favorites": [], 
+                "settings": {
+                    "currency": "EUR (€)",
+                    "account_size": 10000.0,
+                    "risk_pct": 2.0,
+                    "max_allocation_pct": 20
+                }
+            }
             save_user_data(all_users_data)
             st.rerun()
 else:
     current_user = selected_user
 
+# Datenstruktur für ältere Profile absichern (Rückwärtskompatibilität)
 if current_user not in all_users_data:
-    all_users_data[current_user] = {"trades": {}, "favorites": []}
+    all_users_data[current_user] = {"trades": {}, "favorites": [], "settings": {}}
 if "trades" not in all_users_data[current_user]:
     all_users_data[current_user]["trades"] = {}
 if "favorites" not in all_users_data[current_user]:
     all_users_data[current_user]["favorites"] = []
+if "settings" not in all_users_data[current_user]:
+    all_users_data[current_user]["settings"] = {
+        "currency": "EUR (€)",
+        "account_size": 10000.0,
+        "risk_pct": 2.0,
+        "max_allocation_pct": 20
+    }
 
 cleaned_trades = {
     str(k).strip(): v
@@ -129,15 +147,46 @@ if cleaned_trades != all_users_data[current_user]["trades"]:
 
 user_trades = all_users_data[current_user]["trades"]
 user_favorites = set(all_users_data[current_user]["favorites"])
+user_settings = all_users_data[current_user]["settings"]
 
 st.sidebar.success(f"Angemeldet als: **{current_user}**")
 st.sidebar.markdown("---")
 
 st.sidebar.subheader("⚖️ Risiko-Management")
-account_currency = st.sidebar.radio("Depotwährung:", ["EUR (€)", "USD ($)"])
-account_size = st.sidebar.number_input("Gesamtdepot:", min_value=500.0, value=10000.0, step=500.0)
-risk_pct = st.sidebar.slider("Max. Verlust pro Trade (%):", min_value=0.5, max_value=3.0, value=2.0, step=0.25)
-max_allocation_pct = st.sidebar.slider("Max. Depotanteil pro Aktie (%):", min_value=5, max_value=30, value=20, step=5)
+
+# Individuelle Nutzer-Einstellungen aus der Datenbank laden
+def_currency = user_settings.get("currency", "EUR (€)")
+def_acc_size = float(user_settings.get("account_size", 10000.0))
+def_risk_pct = float(user_settings.get("risk_pct", 2.0))
+def_alloc_pct = int(user_settings.get("max_allocation_pct", 20))
+
+curr_idx = 0 if def_currency == "EUR (€)" else 1
+
+# Eingabefelder mit den persönlichen Werten füllen
+new_currency = st.sidebar.radio("Depotwährung:", ["EUR (€)", "USD ($)"], index=curr_idx)
+new_acc_size = st.sidebar.number_input("Gesamtdepot:", min_value=500.0, value=def_acc_size, step=500.0)
+new_risk_pct = st.sidebar.slider("Max. Verlust pro Trade (%):", min_value=0.5, max_value=3.0, value=def_risk_pct, step=0.25)
+new_max_alloc = st.sidebar.slider("Max. Depotanteil pro Aktie (%):", min_value=5, max_value=30, value=def_alloc_pct, step=5)
+
+# Falls der Nutzer in der Seitenleiste etwas ändert, wird es SOFORT in sein Profil gespeichert
+if (new_currency != def_currency or 
+    new_acc_size != def_acc_size or 
+    new_risk_pct != def_risk_pct or 
+    new_max_alloc != def_alloc_pct):
+    
+    all_users_data[current_user]["settings"] = {
+        "currency": new_currency,
+        "account_size": new_acc_size,
+        "risk_pct": new_risk_pct,
+        "max_allocation_pct": new_max_alloc
+    }
+    save_user_data(all_users_data)
+
+# Variablen für die Berechnungen im Rest des Programms übernehmen
+account_currency = new_currency
+account_size = new_acc_size
+risk_pct = new_risk_pct
+max_allocation_pct = new_max_alloc
 
 max_risk_amount = account_size * (risk_pct / 100.0)
 max_pos_capital = account_size * (max_allocation_pct / 100.0)
@@ -654,7 +703,7 @@ with tab1:
     elif sort_by == "🚀 Beste Tagesperformance (%)": f_df = f_df.sort_values(by="DailyChange", ascending=False)
     else: f_df = f_df.sort_values(by="RS Score", ascending=False)
 
-    st.caption(f"Gefundene Setups: **{len(f_df)}**")
+    st.caption(f"Gefundene Setups: **{len(f_df)}** (Kombinierbare Filter aktiv)")
 
     if f_df.empty:
         st.info("Aktuell keine Setups gefunden. Passe die Filter an oder schau in **Tab 4 (Alle Aktien)**.")
