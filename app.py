@@ -7,7 +7,7 @@
 # - Tagesgewichtete Volumen-Berechnung (RVOL unter der Woche)
 # - 2-Stufen-Stop: 21 EMA Wochenschluss (Trend) & Notfall-Stop (-3% Broker-Puffer)
 # - Take-Profits: 20W-Hoch / 1:3 CRV, 52W-Hoch / 1:5 CRV, 50er-Schritte bei ATH
-# - Tab 2: EMAs unter aktuellem Kurs, TP/SL-Anordnung & Durchstreich-Logik
+# - Tab 2: Toggle-Buttons für TP 50%/90% mit Farbhervorhebung & Durchstreich-Logik
 # =====================================================================
 
 from datetime import datetime
@@ -183,7 +183,7 @@ def calculate_dynamic_volume_ratio(
     if len(vol_d) < 15 or len(vol_w) < 5:
         return 1.0
 
-    # 1. Historische Verteilung nach Wochentagen (0 = Mo, ..., 4 = Fr)
+    # Historische Verteilung nach Wochentagen (0 = Mo, ..., 4 = Fr)
     recent_daily = vol_d.iloc[-60:].copy()
     df_vol = pd.DataFrame(
         {
@@ -198,7 +198,6 @@ def calculate_dynamic_volume_ratio(
 
     mean_weekday_shares = df_vol.groupby("Weekday")["Day_Share"].mean()
 
-    # Fallback-Profil für die US-Märkte
     default_profile = {0: 0.17, 1: 0.19, 2: 0.19, 3: 0.20, 4: 0.25}
     for day in range(5):
         if day not in mean_weekday_shares or pd.isna(
@@ -209,11 +208,11 @@ def calculate_dynamic_volume_ratio(
     total_share = mean_weekday_shares.loc[0:4].sum()
     normalized_shares = mean_weekday_shares.loc[0:4] / total_share
 
-    # 2. Erwarteter Anteil bis zum heutigen Tag
+    # Erwarteter Anteil bis zum heutigen Tag
     current_weekday = min(datetime.now().weekday(), 4)
     cumulative_expected_share = normalized_shares.loc[0:current_weekday].sum()
 
-    # 3. Durchschnittliches 10-Wochen-Volumen
+    # Durchschnittliches 10-Wochen-Volumen
     avg_full_week_vol = (
         vol_w.iloc[-11:-1].mean()
         if len(vol_w) >= 11
@@ -419,7 +418,7 @@ def load_screener_data():
             ) * 100.0
         rs_score = round(stock_12w_perf - spy_12w_perf, 2)
 
-        # Dynamisches tagesgewichtetes Volumenverhältnis abrufen
+        # Dynamisches Volumenverhältnis
         vol_ratio = calculate_dynamic_volume_ratio(vol_d, vol_w, sym)
 
         macd_rising = m_hist > m_hist_prev
@@ -955,7 +954,7 @@ with tab1:
                 render_stock_card(row, key_prefix="screener")
 
 # =====================================================================
-# TAB 2: MEINE AKTIVEN TRADES (ANGEPASSTE POSITIONIERUNG & DURCHSTREICH-LOGIK)
+# TAB 2: MEINE AKTIVEN TRADES (MIT INTERAKTIVEN TOGGLE-BUTTONS)
 # =====================================================================
 with tab2:
     if len(user_trades) == 0:
@@ -1021,28 +1020,29 @@ with tab2:
 
             trade_status = str(info.get("status", "Offen"))
 
+            # Status-Prüfung für die Toggles
+            is_50_saved = "50%" in trade_status
+            is_90_saved = "90%" in trade_status
+
             # Status-Badge ermitteln
             if trade_status == "Offen" and curr_usd >= tp1_usd:
                 status_display = (
                     ":orange[**⚡ ZIEL 1 ERREICHT! (50% TP Bereit)**]"
                 )
-            elif "50%" in trade_status and curr_usd >= tp2_usd:
+            elif is_50_saved and curr_usd >= tp2_usd:
                 status_display = (
                     ":orange[**⚡ ZIEL 2 ERREICHT! (90% TP Bereit)**]"
                 )
-            elif "50%" in trade_status:
+            elif is_50_saved:
                 status_display = ":green[**💰 50% TP Gesichert**]"
-            elif "90%" in trade_status:
+            elif is_90_saved:
                 status_display = (
                     ":green[**🚀 90% TP Gesichert (Runner aktiv)**]"
                 )
             else:
                 status_display = f"**{trade_status}**"
 
-            # Dynamische Durchstreich-Logik für TPs
-            is_50_saved = "50%" in trade_status
-            is_90_saved = "90%" in trade_status
-
+            # Dynamische Durchstreich-Formatierung
             tp1_raw = f"🎯 **TP 1:** `${tp1_usd}` | `€{tp1_eur}` <span style='color:gray; font-size:11px;'>({tp1_lbl})</span>"
             tp2_raw = f"🚀 **TP 2:** `${tp2_usd}` | `€{tp2_eur}` <span style='color:gray; font-size:11px;'>({tp2_lbl})</span>"
 
@@ -1093,22 +1093,49 @@ with tab2:
                         unsafe_allow_html=True,
                     )
 
-                # SPALTE 4: Teilgewinn-Buttons
+                # SPALTE 4: Interaktive Toggle-Buttons (Farbe wechselt bei Aktivierung)
                 with c4:
-                    if st.button("💰 50% TP sichern", key=f"tp50_{sym}"):
-                        all_users_data[current_user]["trades"][sym]["status"] = (
-                            "💰 50% TP Gesichert"
-                        )
-                        save_user_data(all_users_data)
-                        st.rerun()
-                    if st.button("🚀 90% TP sichern", key=f"tp90_{sym}"):
-                        all_users_data[current_user]["trades"][sym]["status"] = (
-                            "🚀 90% TP Gesichert"
-                        )
+                    btn_50_label = (
+                        "✅ 50% Gesichert"
+                        if is_50_saved
+                        else "💰 50% TP sichern"
+                    )
+                    btn_50_type = "primary" if is_50_saved else "secondary"
+
+                    if st.button(
+                        btn_50_label,
+                        key=f"tp50_{sym}",
+                        type=btn_50_type,
+                        use_container_width=True,
+                    ):
+                        if is_50_saved:
+                            all_users_data[current_user]["trades"][sym]["status"] = "Offen"
+                        else:
+                            all_users_data[current_user]["trades"][sym]["status"] = "💰 50% TP Gesichert"
                         save_user_data(all_users_data)
                         st.rerun()
 
-                # SPALTE 5: Close-Button
+                    btn_90_label = (
+                        "✅ 90% Gesichert"
+                        if is_90_saved
+                        else "🚀 90% TP sichern"
+                    )
+                    btn_90_type = "primary" if is_90_saved else "secondary"
+
+                    if st.button(
+                        btn_90_label,
+                        key=f"tp90_{sym}",
+                        type=btn_90_type,
+                        use_container_width=True,
+                    ):
+                        if is_90_saved:
+                            all_users_data[current_user]["trades"][sym]["status"] = "Offen"
+                        else:
+                            all_users_data[current_user]["trades"][sym]["status"] = "🚀 90% TP Gesichert"
+                        save_user_data(all_users_data)
+                        st.rerun()
+
+                # SPALTE 5: Position schließen
                 with c5:
                     if st.button(
                         "🗑️ Close",
