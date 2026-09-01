@@ -5,8 +5,8 @@
 # - Minimalistisches Markt-Ampel Banner
 # - RS-Score als Standard-Filter & Sortierung
 # - Kombinierbarer Filter für überdehnte Aktien (<= 3.0% zur 10 EMA)
-# - Flexibler persönlicher Kaufkurs (Wählbar zwischen € und $)
-# - 100% Backtest-Logik beim Trailing Stop des Runners (max(Entry, 21 EMA))
+# - Flexibler persönlicher Kaufkurs (Wählbar zwischen € und $, Standard: €)
+# - Stop-Loss Währung passt sich dynamisch dem persönlichen Einstieg an
 # =====================================================================
 
 from datetime import datetime
@@ -647,7 +647,7 @@ def render_stock_card(row, key_prefix="card"):
                     "entry_price_usd": row["Kurs_USD"],
                     "entry_price_eur": row["Kurs_EUR"],
                     "custom_entry_val": 0.0,
-                    "custom_entry_cur": "$",
+                    "custom_entry_cur": "€", # Standard auf Euro gesetzt
                     "invalidation_usd": row["Invalidation_USD"],
                     "invalidation_eur": row["Invalidation_EUR"],
                     "emergency_sl_usd": row["EmergencySL_USD"],
@@ -672,40 +672,6 @@ if spy_market_bullish:
     st.success("🟢 **MARKT-STATUS: BULLENMARKT AKTIV**")
 else:
     st.error("🔴 **MARKT-STATUS: KORREKTUR / BÄRENMARKT**")
-
-total_active = len(user_trades)
-at_risk_count = 0
-invalidated_count = 0
-tp_ready_count = 0
-
-for sym, info in user_trades.items():
-    if sym in close_w.columns:
-        c_price = close_w[sym].dropna().iloc[-1]
-        e21_val = ema21_df[sym].dropna().iloc[-1]
-
-        if c_price < e21_val:
-            invalidated_count += 1
-        elif c_price <= e21_val * 1.015:
-            at_risk_count += 1
-
-        tp1_val = info.get("tp1_usd", 0.0)
-        tp2_val = info.get("tp2_usd", 0.0)
-        trade_status = str(info.get("status", "Offen"))
-
-        if trade_status == "Offen" and tp1_val > 0 and c_price >= tp1_val:
-            tp_ready_count += 1
-        elif "50%" in trade_status and tp2_val > 0 and c_price >= tp2_val:
-            tp_ready_count += 1
-
-m1, m2, m3, m4 = st.columns(4)
-with m1:
-    st.metric(label="🎯 Aktive Positionen", value=f"{total_active} Trades")
-with m2:
-    st.metric(label="💰 Teilgewinne bereit", value=f"{tp_ready_count} Trades", delta="Kurs an Zielzone!" if tp_ready_count > 0 else "Warten auf Targets", delta_color="normal" if tp_ready_count > 0 else "off")
-with m3:
-    st.metric(label="⚠️ Nahe 21 EMA (Gefährdet)", value=f"{at_risk_count} Trades", delta="Testet Support" if at_risk_count > 0 else "Alles stabil", delta_color="inverse" if at_risk_count > 0 else "off")
-with m4:
-    st.metric(label="❌ Invalidiert (Wochenschluss < 21 EMA)", value=f"{invalidated_count} Trades", delta="Freitagsschluss < 21 EMA" if invalidated_count > 0 else "Keine", delta_color="inverse" if invalidated_count > 0 else "off")
 
 st.markdown("---")
 
@@ -800,9 +766,47 @@ with tab1:
                 render_stock_card(row, key_prefix="screener")
 
 # =====================================================================
-# TAB 2: MEINE AKTIVEN TRADES (MIT PERSÖNLICHEM WÄHRUNGS-EINSTIEG)
+# TAB 2: MEINE AKTIVEN TRADES (DYNAMISCHE WÄHRUNG & METRIKEN HIER)
 # =====================================================================
 with tab2:
+    
+    # --- Performance-Metriken in Tab 2 verlagert für mehr Übersicht im Screener ---
+    total_active = len(user_trades)
+    at_risk_count = 0
+    invalidated_count = 0
+    tp_ready_count = 0
+
+    for sym, info in user_trades.items():
+        if sym in close_w.columns:
+            c_price = close_w[sym].dropna().iloc[-1]
+            e21_val = ema21_df[sym].dropna().iloc[-1]
+
+            if c_price < e21_val:
+                invalidated_count += 1
+            elif c_price <= e21_val * 1.015:
+                at_risk_count += 1
+
+            tp1_val = info.get("tp1_usd", 0.0)
+            tp2_val = info.get("tp2_usd", 0.0)
+            trade_status = str(info.get("status", "Offen"))
+
+            if trade_status == "Offen" and tp1_val > 0 and c_price >= tp1_val:
+                tp_ready_count += 1
+            elif "50%" in trade_status and tp2_val > 0 and c_price >= tp2_val:
+                tp_ready_count += 1
+
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        st.metric(label="🎯 Aktive Positionen", value=f"{total_active} Trades")
+    with m2:
+        st.metric(label="💰 Teilgewinne bereit", value=f"{tp_ready_count} Trades", delta="Kurs an Zielzone!" if tp_ready_count > 0 else "Warten auf Targets", delta_color="normal" if tp_ready_count > 0 else "off")
+    with m3:
+        st.metric(label="⚠️ Nahe 21 EMA (Gefährdet)", value=f"{at_risk_count} Trades", delta="Testet Support" if at_risk_count > 0 else "Alles stabil", delta_color="inverse" if at_risk_count > 0 else "off")
+    with m4:
+        st.metric(label="❌ Invalidiert (Wochenschluss < 21 EMA)", value=f"{invalidated_count} Trades", delta="Freitagsschluss < 21 EMA" if invalidated_count > 0 else "Keine", delta_color="inverse" if invalidated_count > 0 else "off")
+    
+    st.markdown("---")
+
     if len(user_trades) == 0:
         st.info("Noch keine aktiven Trades vorhanden.")
     else:
@@ -822,11 +826,11 @@ with tab2:
             default_entry_usd = info.get("entry_price_usd", curr_usd)
             default_entry_eur = info.get("entry_price_eur", curr_eur)
 
-            # Persönlichen Einstieg laden (Abwärtskompatibel zu alten JSON Dateien)
+            # Persönlichen Einstieg laden (Standard ist nun €)
             custom_entry_val = float(info.get("custom_entry_val", info.get("custom_entry", 0.0)))
-            custom_entry_cur = info.get("custom_entry_cur", "$")
+            custom_entry_cur = info.get("custom_entry_cur", "€")
 
-            # Umrechnung des persönlichen Einstiegs in USD für interne Berechnung
+            # Umrechnung des persönlichen Einstiegs in USD für die Logik (Trailing EMA Berechnungen)
             custom_entry_usd = 0.0
             if custom_entry_val > 0:
                 if custom_entry_cur == "€":
@@ -849,41 +853,41 @@ with tab2:
             is_90_saved = "90%" in trade_status
 
             # =================================================================
-            # STOP-LOSS LOGIK (BACKTEST 10% RUNNER & BREAK EVEN)
+            # DYNAMISCHE STOP-LOSS ANZEIGE IN DER PERSÖNLICHEN WÄHRUNG
             # =================================================================
-            curr_sym_char = "€" if account_currency == "EUR (€)" else "$"
+            # Entweder die Custom Währung (falls Eintrag) oder das globale System-Symbol
+            global_sym_char = "€" if account_currency == "EUR (€)" else "$"
+            display_cur_sym = custom_entry_cur if custom_entry_val > 0 else global_sym_char
             
             if is_90_saved:
-                # RUNNER-LOGIK AUS DEM BACKTEST: Stop ist max(Einstieg, 21 EMA - 3%)
-                # Invalidation ist max(Einstieg, 21 EMA)
                 em_sl_usd = max(base_entry_usd, curr_e21_usd * 0.97)
                 inv_usd = max(base_entry_usd, curr_e21_usd)
                 
-                sl_disp = (em_sl_usd * usd_to_eur_rate) if account_currency == "EUR (€)" else em_sl_usd
-                inv_disp = (inv_usd * usd_to_eur_rate) if account_currency == "EUR (€)" else inv_usd
+                sl_disp = (em_sl_usd * usd_to_eur_rate) if display_cur_sym == "€" else em_sl_usd
+                inv_disp = (inv_usd * usd_to_eur_rate) if display_cur_sym == "€" else inv_usd
                 
                 sl_display_text = (
-                    f"🏃 **Trailing Stop:** `{curr_sym_char}{sl_disp:.2f}` *(Sichert aufgelaufenen Gewinn)*\n\n"
+                    f"🏃 **Trailing Stop:** `{display_cur_sym}{sl_disp:.2f}` *(Sichert aufgelaufenen Gewinn)*\n\n"
                     f"<span style='color:gray; font-size:11px;'>👉 Stop ist auf <b>max(Einstieg, 21 EMA - 3%)</b> nachgezogen.<br>"
-                    f"Wochenschluss unter {curr_sym_char}{inv_disp:.2f} schließt die Restposition.</span>"
+                    f"Wochenschluss unter {display_cur_sym}{inv_disp:.2f} schließt die Restposition.</span>"
                 )
             elif is_50_saved:
                 if custom_entry_val > 0:
-                    sl_disp = (custom_entry_usd * usd_to_eur_rate) if account_currency == "EUR (€)" else custom_entry_usd
                     sl_display_text = (
-                        f"🛑 **Stop-Loss:** `{curr_sym_char}{sl_disp:.2f}` *(Break-Even)*\n\n"
+                        f"🛑 **Stop-Loss:** `{display_cur_sym}{custom_entry_val:.2f}` *(Break-Even / Persönlicher Einstieg)*\n\n"
                         f"<span style='color:gray; font-size:11px;'>👉 Stop fest im Broker auf deinen eingetragenen Kaufkurs nachgezogen.</span>"
                     )
                 else:
+                    ref_entry = default_entry_eur if global_sym_char == "€" else default_entry_usd
                     sl_display_text = (
-                        f"🛑 **Stop-Loss:** `Setze Stop auf Break Even / Einstieg`\n\n"
+                        f"🛑 **Stop-Loss:** `Setze Stop auf Break Even / Einstieg` *({global_sym_char}{ref_entry:.2f})*\n\n"
                         f"<span style='color:gray; font-size:11px;'>👉 Da du keinen Kaufkurs eingegeben hast, ziehe deinen Stop nun manuell auf deinen Einstiegspreis nach.</span>"
                     )
             else:
                 em_sl_usd = info.get("emergency_sl_usd", curr_e21_usd * 0.97)
-                sl_disp = (em_sl_usd * usd_to_eur_rate) if account_currency == "EUR (€)" else em_sl_usd
+                sl_disp = (em_sl_usd * usd_to_eur_rate) if display_cur_sym == "€" else em_sl_usd
                 sl_display_text = (
-                    f"🛡️ **Notfall-Stop (Broker):** `{curr_sym_char}{sl_disp:.2f}`\n\n"
+                    f"🛡️ **Notfall-Stop (Broker):** `{display_cur_sym}{sl_disp:.2f}`\n\n"
                     f"<span style='color:gray; font-size:11px;'>👉 Fester Stop-Loss im Broker (3% unter 21 EMA).</span>"
                 )
 
@@ -952,7 +956,7 @@ with tab2:
                     st.markdown("<div style='font-size:13px; font-weight:600; margin-bottom:-10px;'>Persönlicher Einstieg (optional):</div>", unsafe_allow_html=True)
                     in_col1, in_col2 = st.columns([1, 2.5])
                     with in_col1:
-                        new_custom_cur = st.selectbox("Währung", ["$", "€"], index=0 if custom_entry_cur == "$" else 1, key=f"cur_{sym}", label_visibility="collapsed")
+                        new_custom_cur = st.selectbox("Währung", ["€", "$"], index=0 if custom_entry_cur == "€" else 1, key=f"cur_{sym}", label_visibility="collapsed")
                     with in_col2:
                         new_custom_val = st.number_input("Betrag", min_value=0.0, value=custom_entry_val, step=0.50, key=f"val_{sym}", label_visibility="collapsed")
                     
