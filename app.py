@@ -5,10 +5,10 @@
 # - Minimalistisches Markt-Ampel Banner & CSS Hover-Effekte
 # - Farbige Scorecards für die wichtigsten Metriken auf der Startseite
 # - "Toast"-Benachrichtigungen bei Nutzerinteraktionen
-# - Meine Trades (Tab 2) intelligent sortiert nach Handlungsbedarf mit Aktions-Icons
+# - Meine Trades (Tab 2) intelligent sortiert nach Handlungsbedarf
 # - RS-Score als Standard-Filter, kombinierbar mit Einstiegs-Zonen
 # - Flexibler persönlicher Kaufkurs (€/$) & dynamischer Stop-Loss
-# - NEU: Individuelle Speicherung von Risiko & Depotgröße pro Nutzerprofil!
+# - NEU: Strenge Profil-Trennung durch dynamische Widget-Keys!
 # =====================================================================
 
 from datetime import datetime
@@ -162,13 +162,14 @@ def_alloc_pct = int(user_settings.get("max_allocation_pct", 20))
 
 curr_idx = 0 if def_currency == "EUR (€)" else 1
 
-# Eingabefelder mit den persönlichen Werten füllen
-new_currency = st.sidebar.radio("Depotwährung:", ["EUR (€)", "USD ($)"], index=curr_idx)
-new_acc_size = st.sidebar.number_input("Gesamtdepot:", min_value=500.0, value=def_acc_size, step=500.0)
-new_risk_pct = st.sidebar.slider("Max. Verlust pro Trade (%):", min_value=0.5, max_value=3.0, value=def_risk_pct, step=0.25)
-new_max_alloc = st.sidebar.slider("Max. Depotanteil pro Aktie (%):", min_value=5, max_value=30, value=def_alloc_pct, step=5)
+# WICHTIG: Die Keys haben nun den Nutzernamen als Suffix (z.B. acc_size_Papa)
+# Das trennt die Regler der Profile strikt voneinander.
+new_currency = st.sidebar.radio("Depotwährung:", ["EUR (€)", "USD ($)"], index=curr_idx, key=f"curr_{current_user}")
+new_acc_size = st.sidebar.number_input("Gesamtdepot:", min_value=500.0, value=def_acc_size, step=500.0, key=f"acc_size_{current_user}")
+new_risk_pct = st.sidebar.slider("Max. Verlust pro Trade (%):", min_value=0.5, max_value=3.0, value=def_risk_pct, step=0.25, key=f"risk_pct_{current_user}")
+new_max_alloc = st.sidebar.slider("Max. Depotanteil pro Aktie (%):", min_value=5, max_value=30, value=def_alloc_pct, step=5, key=f"max_alloc_{current_user}")
 
-# Falls der Nutzer in der Seitenleiste etwas ändert, wird es SOFORT in sein Profil gespeichert
+# Falls der Nutzer in der Seitenleiste etwas ändert, wird es SOFORT für sein Profil gespeichert
 if (new_currency != def_currency or 
     new_acc_size != def_acc_size or 
     new_risk_pct != def_risk_pct or 
@@ -484,7 +485,7 @@ st.sidebar.caption(
 )
 
 # ---------------------------------------------------------------------
-# 6. HEADER, MARKT-AMPEL & NEUE SCORECARDS
+# 6. HEADER, MARKT-AMPEL & SCORECARDS
 # ---------------------------------------------------------------------
 st.title(f"📈 Weekly Trading Hub Pro — ({current_user})")
 
@@ -493,7 +494,6 @@ if spy_market_bullish:
 else:
     st.error("🔴 **MARKT-STATUS: KORREKTUR / BÄRENMARKT**")
 
-# Vorab-Berechnung der Metriken für die Scorecards
 total_active = len(user_trades)
 at_risk_count = 0
 invalidated_count = 0
@@ -518,7 +518,6 @@ for sym, info in user_trades.items():
         elif "50%" in trade_status and tp2_val > 0 and c_price >= tp2_val:
             tp_ready_count += 1
 
-# Rendering der farbigen Scorecards
 m1, m2, m3, m4 = st.columns(4)
 with m1:
     st.markdown(f"<div class='scorecard sc-blue'><p class='sc-val'>{total_active}</p><p class='sc-label'>🎯 Aktive Trades</p></div>", unsafe_allow_html=True)
@@ -530,7 +529,7 @@ with m4:
     st.markdown(f"<div class='scorecard sc-red'><p class='sc-val'>{invalidated_count}</p><p class='sc-label'>❌ Invalidiert (< 21 EMA)</p></div>", unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------
-# 7. MODULARE KARTEN-DARSTELLUNG FÜR SCREENER (MIT TOASTS)
+# 7. MODULARE KARTEN-DARSTELLUNG (ALLGEMEIN)
 # ---------------------------------------------------------------------
 def render_stock_card(row, key_prefix="card"):
     sym = row["Aktie"]
@@ -718,15 +717,13 @@ with tab1:
             with cols[idx % 4]:
                 render_stock_card(row, key_prefix="screener")
 
-
 # =====================================================================
-# TAB 2: MEINE AKTIVEN TRADES (INTELLIGENT SORTIERT & MIT ICONS)
+# TAB 2: MEINE AKTIVEN TRADES (PERSÖNLICHE WÄHRUNG & SORTIERUNG)
 # =====================================================================
 with tab2:
     if len(user_trades) == 0:
         st.info("Noch keine aktiven Trades vorhanden.")
     else:
-        # Schritt 1: Alle aktiven Trades vorab bewerten und in eine Liste packen
         active_trades_data = []
         
         for sym, info in list(user_trades.items()):
@@ -763,19 +760,16 @@ with tab2:
             is_50_saved = "50%" in trade_status
             is_90_saved = "90%" in trade_status
 
-            # Zustandsermittlung für Priorisierung
             is_invalidated = curr_usd < curr_e21_usd
             is_near_e10 = (curr_usd >= curr_e10_usd) and (curr_usd <= curr_e10_usd * 1.015)
             is_below_e10 = curr_usd < curr_e10_usd and not is_invalidated
             at_risk = (curr_usd <= curr_e21_usd * 1.015) and not is_invalidated
             
             tp_ready = False
-            if trade_status == "Offen" and curr_usd >= tp1_usd:
-                tp_ready = True
-            elif is_50_saved and curr_usd >= tp2_usd:
-                tp_ready = True
+            if trade_status == "Offen" and curr_usd >= tp1_usd: tp_ready = True
+            elif is_50_saved and curr_usd >= tp2_usd: tp_ready = True
 
-            # PRIORITÄT UND ICON ZUWEISEN
+            # PRIORITÄT UND ICON ZUWEISEN FÜR SORTIERUNG
             if is_invalidated:
                 priority = 1
                 action_icon = "❌"
@@ -790,33 +784,17 @@ with tab2:
                 action_icon = "✅"
 
             active_trades_data.append({
-                "sym": sym,
-                "info": info,
-                "priority": priority,
-                "action_icon": action_icon,
-                "curr_usd": curr_usd,
-                "curr_eur": curr_eur,
-                "curr_e10_usd": curr_e10_usd,
-                "curr_e21_usd": curr_e21_usd,
-                "base_entry_usd": base_entry_usd,
-                "custom_entry_val": custom_entry_val,
-                "custom_entry_cur": custom_entry_cur,
-                "tp1_usd": tp1_usd,
-                "tp1_eur": tp1_eur,
-                "tp2_usd": tp2_usd,
-                "tp2_eur": tp2_eur,
-                "is_50_saved": is_50_saved,
-                "is_90_saved": is_90_saved,
-                "trade_status": trade_status,
-                "is_invalidated": is_invalidated,
-                "is_below_e10": is_below_e10,
-                "is_near_e10": is_near_e10
+                "sym": sym, "info": info, "priority": priority, "action_icon": action_icon,
+                "curr_usd": curr_usd, "curr_eur": curr_eur, "curr_e10_usd": curr_e10_usd,
+                "curr_e21_usd": curr_e21_usd, "base_entry_usd": base_entry_usd,
+                "custom_entry_val": custom_entry_val, "custom_entry_cur": custom_entry_cur,
+                "tp1_usd": tp1_usd, "tp1_eur": tp1_eur, "tp2_usd": tp2_usd, "tp2_eur": tp2_eur,
+                "is_50_saved": is_50_saved, "is_90_saved": is_90_saved, "trade_status": trade_status,
+                "is_invalidated": is_invalidated, "is_below_e10": is_below_e10, "is_near_e10": is_near_e10
             })
 
-        # Schritt 2: Trades nach Priorität sortieren
         active_trades_data.sort(key=lambda x: x["priority"])
 
-        # Schritt 3: Karten rendern
         for t_data in active_trades_data:
             sym = t_data["sym"]
             info = t_data["info"]
@@ -840,7 +818,6 @@ with tab2:
             curr_sym_char = "€" if account_currency == "EUR (€)" else "$"
             display_cur_sym = custom_entry_cur if custom_entry_val > 0 else curr_sym_char
             
-            # Stop-Loss Logik
             if is_90_saved:
                 em_sl_usd = max(base_entry_usd, curr_e21_usd * 0.97)
                 inv_usd = max(base_entry_usd, curr_e21_usd)
@@ -858,7 +835,6 @@ with tab2:
                 sl_disp = (em_sl_usd * usd_to_eur_rate) if display_cur_sym == "€" else em_sl_usd
                 sl_display_text = f"🛡️ **Notfall-Stop:** `{display_cur_sym}{sl_disp:.2f}`\n\n<span style='color:gray; font-size:11px;'>👉 Fester Stop-Loss im Broker (3% unter 21 EMA).</span>"
 
-            # Trend & Health Colors
             if is_invalidated:
                 ema10_color, ema21_color, health_color = "orange", "orange", "red"
                 health = "❌ INVALIDIERT (Wochenschluss unter 21 EMA!)"
@@ -872,7 +848,6 @@ with tab2:
                 ema10_color, ema21_color, health_color = "green", "green", "green"
                 health = "✅ IM TREND (Deutlich über 10 EMA)"
 
-            # Status Badge
             if trade_status == "Offen" and curr_usd >= t_data["tp1_usd"]: status_display = ":orange[**⚡ ZIEL 1 ERREICHT! (50% TP Bereit)**]"
             elif is_50_saved and curr_usd >= t_data["tp2_usd"]: status_display = ":orange[**⚡ ZIEL 2 ERREICHT! (90% TP Bereit)**]"
             elif is_50_saved: status_display = ":green[**💰 50% TP Gesichert (Stop auf BE)**]"
@@ -899,7 +874,6 @@ with tab2:
 
                 with c1:
                     st.markdown(f"<span style='color:gray; font-size:12px;'>{company_names.get(sym, sym)}</span>", unsafe_allow_html=True)
-                    # Das Aktions-Icon ist jetzt prominent vor dem Ticker
                     st.markdown(f"### {action_icon} **[{sym}]({google_link})**")
                     st.caption(f"Einstieg: {info.get('entry_date', '-')}")
                     st.link_button("📊 Chart", tv_link)
@@ -911,19 +885,20 @@ with tab2:
                         f"**10 EMA:** :{ema10_color}[${round(curr_e10_usd, 2)}] | "
                         f"**21 EMA:** :{ema21_color}[${round(curr_e21_usd, 2)}]"
                     )
-
+                    
                     st.markdown("<div style='font-size:13px; font-weight:600; margin-bottom:-10px;'>Persönlicher Einstieg (optional):</div>", unsafe_allow_html=True)
                     in_col1, in_col2 = st.columns([1, 2.5])
                     with in_col1:
-                        new_custom_cur = st.selectbox("Währung", ["€", "$"], index=0 if custom_entry_cur == "€" else 1, key=f"cur_{sym}", label_visibility="collapsed")
+                        # WICHTIG: Key-Änderung für Profil-Trennung!
+                        new_custom_cur = st.selectbox("Währung", ["€", "$"], index=0 if custom_entry_cur == "€" else 1, key=f"cur_{sym}_{current_user}", label_visibility="collapsed")
                     with in_col2:
-                        new_custom_val = st.number_input("Betrag", min_value=0.0, value=custom_entry_val, step=0.50, key=f"val_{sym}", label_visibility="collapsed")
+                        new_custom_val = st.number_input("Betrag", min_value=0.0, value=custom_entry_val, step=0.50, key=f"val_{sym}_{current_user}", label_visibility="collapsed")
                     
                     if new_custom_val != custom_entry_val or new_custom_cur != custom_entry_cur:
                         all_users_data[current_user]["trades"][sym]["custom_entry_val"] = new_custom_val
                         all_users_data[current_user]["trades"][sym]["custom_entry_cur"] = new_custom_cur
                         save_user_data(all_users_data)
-                        st.session_state.toast_msg = f"✅ Persönlicher Einstieg für {sym} gespeichert!"
+                        st.session_state.toast_msg = f"✅ Einstieg für {sym} gespeichert!"
                         st.rerun()
 
                 with c3:
@@ -932,7 +907,7 @@ with tab2:
                 with c4:
                     btn_50_label = "✅ 50% Gesichert" if is_50_saved else "💰 50% TP sichern"
                     btn_50_type = "primary" if is_50_saved else "secondary"
-                    if st.button(btn_50_label, key=f"tp50_{sym}", type=btn_50_type, use_container_width=True):
+                    if st.button(btn_50_label, key=f"tp50_{sym}_{current_user}", type=btn_50_type, use_container_width=True):
                         all_users_data[current_user]["trades"][sym]["status"] = "Offen" if is_50_saved else "💰 50% TP Gesichert"
                         save_user_data(all_users_data)
                         st.session_state.toast_msg = f"💰 50% TP für {sym} erfolgreich gesichert!" if not is_50_saved else f"🔄 Status für {sym} zurückgesetzt."
@@ -940,14 +915,14 @@ with tab2:
 
                     btn_90_label = "✅ 90% Gesichert" if is_90_saved else "🚀 90% TP sichern"
                     btn_90_type = "primary" if is_90_saved else "secondary"
-                    if st.button(btn_90_label, key=f"tp90_{sym}", type=btn_90_type, use_container_width=True):
+                    if st.button(btn_90_label, key=f"tp90_{sym}_{current_user}", type=btn_90_type, use_container_width=True):
                         all_users_data[current_user]["trades"][sym]["status"] = "Offen" if is_90_saved else "🚀 90% TP Gesichert"
                         save_user_data(all_users_data)
                         st.session_state.toast_msg = f"🚀 90% TP für {sym} gesichert. Runner läuft!" if not is_90_saved else f"🔄 Status für {sym} zurückgesetzt."
                         st.rerun()
 
                 with c5:
-                    if st.button("🗑️ Close", key=f"close_{sym}", use_container_width=True):
+                    if st.button("🗑️ Close", key=f"close_{sym}_{current_user}", use_container_width=True):
                         del all_users_data[current_user]["trades"][sym]
                         save_user_data(all_users_data)
                         st.session_state.toast_msg = f"🗑️ Trade {sym} erfolgreich geschlossen."
