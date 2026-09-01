@@ -1,5 +1,5 @@
 # =====================================================================
-# S&P 500 WEEKLY EMA STACK & MACD TRADING HUB PRO
+# S&P 500 & NASDAQ WEEKLY EMA STACK & MACD TRADING HUB PRO
 # =====================================================================
 from datetime import datetime
 from io import StringIO
@@ -16,7 +16,7 @@ import yfinance as yf
 # 1. SEITEN-KONFIGURATION
 # ---------------------------------------------------------------------
 st.set_page_config(
-    page_title="S&P 500 Screener Pro",
+    page_title="S&P 500 & Nasdaq Screener Pro",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -29,7 +29,7 @@ DATA_FILE = "trades.json"
 
 
 def load_user_data() -> dict:
-    """Lädt Trades und Favoriten aus der lokalen JSON-Datei."""
+    """Lädt gespeicherte Trades und Favoriten aus der lokalen JSON-Datei."""
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
@@ -41,7 +41,7 @@ def load_user_data() -> dict:
 
 
 def save_user_data(all_data: dict):
-    """Speichert die Trades und Favoriten sicher ab."""
+    """Speichert Nutzerdaten sicher in der JSON-Datei ab."""
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(all_data, f, indent=4, ensure_ascii=False)
 
@@ -49,7 +49,7 @@ def save_user_data(all_data: dict):
 all_users_data = load_user_data()
 
 # ---------------------------------------------------------------------
-# 3. SIDEBAR: PROFIL & RISIKO-MANAGEMENT
+# 3. SIDEBAR: PROFIL, RISIKO-MANAGEMENT & CACHE-STEUERUNG
 # ---------------------------------------------------------------------
 st.sidebar.title("👤 Profil & Einstellungen")
 
@@ -73,7 +73,7 @@ if selected_user == "➕ Neuer Nutzer...":
 else:
     current_user = selected_user
 
-# Datenstruktur initialisieren & bereinigen
+# Datenstruktur initialisieren
 if current_user not in all_users_data:
     all_users_data[current_user] = {"trades": {}, "favorites": []}
 if "trades" not in all_users_data[current_user]:
@@ -109,7 +109,7 @@ risk_pct = st.sidebar.slider(
     max_value=3.0,
     value=1.0,
     step=0.25,
-    help="Wie viel Prozent des Gesamtdepots du bei Auslösen des Stop-Loss maximal verlierst.",
+    help="Maximaler Verlust bei Notfall-Stop-Auslösung in Prozent des Gesamtdepots.",
 )
 max_allocation_pct = st.sidebar.slider(
     "Max. Depotanteil pro Aktie (%):",
@@ -117,7 +117,7 @@ max_allocation_pct = st.sidebar.slider(
     max_value=40,
     value=20,
     step=5,
-    help="Verhindert Klumpenrisiko. Z. B. maximal 20% des Depots in eine einzige Aktie.",
+    help="Verhindert Klumpenrisiko. Z. B. maximal 20% des Kapitals in eine Aktie.",
 )
 
 max_risk_amount = account_size * (risk_pct / 100.0)
@@ -125,9 +125,16 @@ max_pos_capital = account_size * (max_allocation_pct / 100.0)
 
 curr_sym = "€" if account_currency == "EUR (€)" else "$"
 st.sidebar.caption(
-    f"Max. Stop-Loss Verlust: **{curr_sym}{max_risk_amount:,.2f}**\n\n"
+    f"Max. Notfall-SL Verlust: **{curr_sym}{max_risk_amount:,.2f}**\n\n"
     f"Max. Positionsgröße: **{curr_sym}{max_pos_capital:,.2f}**"
 )
+
+st.sidebar.markdown("---")
+if st.sidebar.button(
+    "🔄 Daten manuell aktualisieren", use_container_width=True
+):
+    st.cache_data.clear()
+    st.rerun()
 
 
 # ---------------------------------------------------------------------
@@ -143,12 +150,101 @@ def get_tradingview_link(ticker: str) -> str:
     return f"https://www.tradingview.com/chart/?symbol={clean_ticker}"
 
 
+def get_next_50_level(price: float) -> float:
+    """Rundet auf die nächste psychologische 50er-Marke über dem Kurs auf."""
+    next_lvl = math.ceil(price / 50.0) * 50.0
+    if next_lvl <= price:
+        next_lvl += 50.0
+    return float(next_lvl)
+
+
 # ---------------------------------------------------------------------
-# 5. DATEN LADEN & STRATEGIE-ENGINE (1:3 / 1:5 CRV & SWING HIGHS)
+# 5. DATEN-ENGINE: ZWEISTUFIGER CACHE
 # ---------------------------------------------------------------------
-@st.cache_data(ttl=900, show_spinner="Lade & berechne S&P 500 Daten...")
+@st.cache_data(
+    ttl=86400,
+    show_spinner="Stufe 1/2: Lade S&P 500 & Nasdaq Universum (> 2 Mrd. $)...",
+)
+def get_qualified_universe(min_market_cap_usd=2_000_000_000):
+    """Lädt S&P 500 und Nasdaq Listen und filtert Werte >= 2 Mrd. USD (24h Cache)."""
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        )
+    }
+
+    company_names = {}
+    company_sectors = {}
+    raw_symbols = []
+
+    # 1. S&P 500 Liste abrufen
+    try:
+        sp500_url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+        sp500_res = requests.get(sp500_url, headers=headers)
+        sp500_table = pd.read_html(StringIO(sp500_res.text), flavor="html5lib")[
+            0
+        ]
+        sp500_table["Symbol_Clean"] = (
+            sp500_table["Symbol"]
+            .astype(str)
+            .str.strip()
+            .str.replace(".", "-", regex=False)
+        )
+
+        for _, row in sp500_table.iterrows():
+            sym = row["Symbol_Clean"]
+            company_names[sym] = row["Security"]
+            company_sectors[sym] = row["GICS Sector"]
+            raw_symbols.append(sym)
+    except Exception as e:
+        st.warning(f"Hinweis: S&P 500 Liste konnte nicht geladen werden: {e}")
+
+    # 2. Nasdaq-100 Liste abrufen
+    try:
+        nasdaq_url = "https://en.wikipedia.org/wiki/Nasdaq-100"
+        nasdaq_res = requests.get(nasdaq_url, headers=headers)
+        nasdaq_table = pd.read_html(
+            StringIO(nasdaq_res.text), flavor="html5lib"
+        )[4]
+        nasdaq_table["Symbol_Clean"] = (
+            nasdaq_table["Ticker"]
+            .astype(str)
+            .str.strip()
+            .str.replace(".", "-", regex=False)
+        )
+
+        for _, row in nasdaq_table.iterrows():
+            sym = row["Symbol_Clean"]
+            if sym not in company_names:
+                company_names[sym] = row.get("Company", sym)
+                company_sectors[sym] = row.get("GICS Sector", "Technology")
+            raw_symbols.append(sym)
+    except Exception as e:
+        st.warning(f"Hinweis: Nasdaq Liste konnte nicht geladen werden: {e}")
+
+    unique_symbols = sorted(list(set(raw_symbols)))
+
+    # Marktkapitalisierung filtern (>= 2 Mrd. USD)
+    qualified_symbols = []
+    for sym in unique_symbols:
+        try:
+            t = yf.Ticker(sym)
+            mcap = t.fast_info.get("market_cap", None)
+            if mcap is None or mcap >= min_market_cap_usd:
+                qualified_symbols.append(sym)
+        except Exception:
+            qualified_symbols.append(sym)
+
+    return qualified_symbols, company_names, company_sectors
+
+
+@st.cache_data(
+    ttl=3600, show_spinner="Stufe 2/2: Aktualisiere Kurse & Indikatoren (1h)..."
+)
 def load_screener_data():
-    # 1. Wechselkurs EUR/USD abrufen
+    """Lädt stündlich die Kursdaten und berechnet 2-Stufen-Stops und Kursziele."""
+    symbols, company_names, company_sectors = get_qualified_universe()
+
     try:
         fx_data = yf.download(
             "EURUSD=X", period="5d", interval="1d", progress=False
@@ -157,28 +253,6 @@ def load_screener_data():
     except Exception:
         usd_to_eur_rate = 0.92
 
-    # 2. S&P 500 Tickerliste abrufen
-    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        )
-    }
-    response = requests.get(url, headers=headers)
-    tables = pd.read_html(StringIO(response.text), flavor="html5lib")
-    sp500_df = tables[0]
-
-    sp500_df["Symbol_Clean"] = (
-        sp500_df["Symbol"].astype(str).str.strip().str.replace(".", "-", regex=False)
-    )
-
-    company_names = dict(zip(sp500_df["Symbol_Clean"], sp500_df["Security"]))
-    company_sectors = dict(
-        zip(sp500_df["Symbol_Clean"], sp500_df["GICS Sector"])
-    )
-    symbols = sorted(list(set(sp500_df["Symbol_Clean"].tolist())))
-
-    # 3. Kursdaten laden
     download_symbols = symbols + ["SPY"]
     raw = yf.download(
         download_symbols,
@@ -194,7 +268,7 @@ def load_screener_data():
     low_d = raw["Low"].dropna(how="all", axis=1)
     vol_d = raw["Volume"].dropna(how="all", axis=1)
 
-    # Weekly Resampling (Freitags-Schlusskurse)
+    # Weekly Resampling
     close_w = close_d.resample("W-FRI").last()
     high_w = high_d.resample("W-FRI").max()
     low_w = low_d.resample("W-FRI").min()
@@ -202,7 +276,7 @@ def load_screener_data():
 
     daily_change_pct = close_d.pct_change().iloc[-1] * 100.0
 
-    # SPY Benchmark Performance (12 Wochen)
+    # SPY 12-Wochen-Performance
     spy_12w_perf = 0.0
     if "SPY" in close_w.columns and len(close_w["SPY"].dropna()) >= 13:
         spy_s = close_w["SPY"].dropna()
@@ -220,9 +294,9 @@ def load_screener_data():
 
     vol_sma10 = vol_w.rolling(window=10).mean()
 
-    # Swing Highs: 20-Wochen-Hoch und 52-Wochen-Hoch
     high_20w = high_w.rolling(window=20, min_periods=5).max()
     high_52w = high_w.rolling(window=52, min_periods=10).max()
+    high_ath = high_w.max()
 
     results = []
 
@@ -258,17 +332,14 @@ def load_screener_data():
             ) * 100.0
         rs_score = round(stock_12w_perf - spy_12w_perf, 2)
 
-        # Volumen-Verhältnis
         curr_vol = vol_w[sym].iloc[-1]
         avg_vol = vol_sma10[sym].iloc[-1]
         vol_ratio = round(curr_vol / avg_vol, 2) if avg_vol > 0 else 1.0
 
-        # Signale & Bedingungen
         macd_rising = m_hist > m_hist_prev
         trend_bullish = e10_usd > e21_usd
         price_above_ema21 = c_usd >= e21_usd
 
-        # Kerzenkörper-Bestätigungen über 10 EMA
         prev_body_above_10ema = c_prev_usd > e10_prev
         curr_body_above_10ema = c_usd > e10_usd
 
@@ -284,7 +355,6 @@ def load_screener_data():
             and not crossover_event
         )
 
-        # Crossover nähert sich an (< 1.5% Differenz)
         near_crossover_event = (
             (e10_usd < e21_usd)
             and (e10_usd / e21_usd >= 0.985)
@@ -297,7 +367,7 @@ def load_screener_data():
         entry_min_usd = e10_usd
         entry_max_usd = e10_usd * 1.015
 
-        # 1. Status: BEREIT (Vorwoche hat mit Körper ÜBER 10 EMA geschlossen)
+        # 1. BEREIT
         if prev_body_above_10ema and price_above_ema21 and macd_rising:
             if crossover_event:
                 status = "BEREIT"
@@ -314,7 +384,7 @@ def load_screener_data():
                 entry_min_usd = e10_usd if retest_ema10_event else e21_usd
                 entry_max_usd = entry_min_usd * 1.015
 
-        # 2. Status: FAST BEREIT (Crossover steht bevor oder laufende Kerze bricht erst jetzt durch)
+        # 2. FAST BEREIT
         elif near_crossover_event:
             status = "FAST BEREIT"
             typ = "10/21 EMA Crossover steht kurz bevor (<1.5% Abstand)"
@@ -331,17 +401,19 @@ def load_screener_data():
             entry_min_usd = e10_usd
             entry_max_usd = e10_usd * 1.015
 
-        # Stop-Loss (21 EMA) & Risiko pro Aktie
-        sl_usd = e21_usd
-        risk_per_share_usd = max(c_usd - sl_usd, c_usd * 0.015)
+        # -------------------------------------------------------------
+        # 2-STUFEN-STOP LOGIK (SOFT INVALIDATION vs. HARD EMERGENCY SL)
+        # -------------------------------------------------------------
+        invalidation_usd = e21_usd  # Wochenschluss unter 21 EMA
+        emergency_sl_usd = e21_usd * 0.97  # Fester Broker-Stop mit 3% Puffer
+        risk_per_share_usd = max(c_usd - emergency_sl_usd, c_usd * 0.02)
 
-        # -------------------------------------------------------------
-        # NEUE TAKE-PROFIT LOGIK (1:3 & 1:5 CRV REGELN)
-        # -------------------------------------------------------------
+        # Take-Profit Logik
         swing_20w_val = high_20w[sym].iloc[-1]
         swing_52w_val = high_52w[sym].iloc[-1]
+        ath_val = high_ath[sym]
 
-        # 1. Target 1 (TP 1): 20-Wochen-Hoch oder mind. 1:3 CRV
+        # TP 1
         crv_20w = (
             ((swing_20w_val - c_usd) / risk_per_share_usd)
             if pd.notna(swing_20w_val) and swing_20w_val > c_usd
@@ -351,27 +423,37 @@ def load_screener_data():
             tp1_usd = swing_20w_val
             tp1_label = f"20W-Hoch (CRV 1:{crv_20w:.1f})"
         else:
-            tp1_usd = c_usd + (3.0 * risk_per_share_usd)
-            tp1_label = "Fester 1:3 CRV"
+            calc_tp1 = c_usd + (3.0 * risk_per_share_usd)
+            if calc_tp1 >= ath_val * 0.985:
+                tp1_usd = get_next_50_level(max(ath_val, calc_tp1))
+                tp1_label = "Psychologische 50er-Marke (über ATH)"
+            else:
+                tp1_usd = calc_tp1
+                tp1_label = "Fester 1:3 CRV"
 
-        # 2. Target 2 (TP 2): 52-Wochen-Hoch (> 1:3 CRV) oder 1:5 CRV
+        # TP 2
         crv_52w = (
             ((swing_52w_val - c_usd) / risk_per_share_usd)
-            if pd.notna(swing_52w_val) and swing_52w_val > tp1_usd
+            if pd.notna(swing_52w_val) and swing_52w_val > tp1_usd * 1.01
             else 0.0
         )
         if crv_52w > 3.0:
             tp2_usd = swing_52w_val
             tp2_label = f"52W-Hoch (CRV 1:{crv_52w:.1f})"
         else:
-            tp2_usd = c_usd + (5.0 * risk_per_share_usd)
-            tp2_label = "Fester 1:5 CRV"
+            calc_tp2 = c_usd + (5.0 * risk_per_share_usd)
+            if tp1_usd >= ath_val * 0.985 or calc_tp2 >= ath_val * 0.985:
+                tp2_usd = get_next_50_level(max(ath_val, tp1_usd))
+                tp2_label = "Psychologische 50er-Marke (über ATH)"
+            else:
+                tp2_usd = calc_tp2
+                tp2_label = "Fester 1:5 CRV"
 
-        sl_dist_pct = ((c_usd - sl_usd) / c_usd) * 100.0
+        emergency_sl_dist_pct = ((c_usd - emergency_sl_usd) / c_usd) * 100.0
         ema_diff_pct = ((e10_usd - e21_usd) / e21_usd) * 100.0
         dist_ema10_pct = abs(c_usd - e10_usd) / e10_usd * 100.0
 
-        # Health-Status
+        # Health Status
         if not price_above_ema21:
             health_status = "❌ INVALIDIERT"
             health_color = "red"
@@ -396,8 +478,13 @@ def load_screener_data():
                 "EMA10_EUR": round(e10_usd * usd_to_eur_rate, 2),
                 "EMA21_USD": round(e21_usd, 2),
                 "EMA21_EUR": round(e21_usd * usd_to_eur_rate, 2),
-                "StopLoss_USD": round(sl_usd, 2),
-                "StopLoss_EUR": round(sl_usd * usd_to_eur_rate, 2),
+                "Invalidation_USD": round(invalidation_usd, 2),
+                "Invalidation_EUR": round(
+                    invalidation_usd * usd_to_eur_rate, 2
+                ),
+                "EmergencySL_USD": round(emergency_sl_usd, 2),
+                "EmergencySL_EUR": round(emergency_sl_usd * usd_to_eur_rate, 2),
+                "EmergencySL_Dist_Pct": round(emergency_sl_dist_pct, 2),
                 "RiskPerShare_USD": risk_per_share_usd,
                 "EntryZone_Min_USD": round(entry_min_usd, 2),
                 "EntryZone_Max_USD": round(entry_max_usd, 2),
@@ -409,7 +496,6 @@ def load_screener_data():
                 "TP2_USD": round(tp2_usd, 2),
                 "TP2_EUR": round(tp2_usd * usd_to_eur_rate, 2),
                 "TP2_Label": tp2_label,
-                "SL Distanz %": round(sl_dist_pct, 2),
                 "EMA Diff %": round(ema_diff_pct, 2),
                 "Dist EMA10 %": dist_ema10_pct,
                 "RS Score": rs_score,
@@ -450,7 +536,7 @@ st.sidebar.caption(f"Wechselkurs: **1 USD = {usd_to_eur_rate:.4f} EUR**")
 
 
 # ---------------------------------------------------------------------
-# 6. MODULARE KARTEN-DARSTELLUNG
+# 6. MODULARE KARTEN-DARSTELLUNG (SCREENER)
 # ---------------------------------------------------------------------
 def render_stock_card(row, key_prefix="card"):
     sym = row["Aktie"]
@@ -482,7 +568,7 @@ def render_stock_card(row, key_prefix="card"):
     else:
         status_tag = ":gray[**NEUTRAL**]"
 
-    # Positionsgrößen-Berechnung
+    # Positionsgrößen-Berechnung basierend auf dem Notfall-Stop
     risk_in_usd = (
         max_risk_amount / usd_to_eur_rate
         if account_currency == "EUR (€)"
@@ -541,15 +627,24 @@ def render_stock_card(row, key_prefix="card"):
             f"**MACD Hist:** `{row['MACD Hist']}` | **Vol:** {vol_badge}"
         )
 
-        with st.expander("🎯 Trade-Plan, Stop & Kursziele"):
+        with st.expander("🎯 Trade-Plan, Stops & Kursziele"):
             st.markdown(
                 f"🎯 **Einstiegszone (nahe 10 EMA):** `${row['EntryZone_Min_USD']} - ${row['EntryZone_Max_USD']}` "
                 f"*(€{row['EntryZone_Min_EUR']} - €{row['EntryZone_Max_EUR']})*"
             )
+            st.markdown("---")
             st.markdown(
-                f"🛑 **Stop-Loss (21 EMA):** `${row['StopLoss_USD']}` | `€{row['StopLoss_EUR']}` "
-                f"(:red[**-{row['SL Distanz %']}%**])"
+                f"⚠️ **Trend-Invalidierung:** Wochenschluss `< ${row['Invalidation_USD']}` *(€{row['Invalidation_EUR']})*\n\n"
+                f"<span style='color:gray; font-size:11px;'>👉 Erst am Freitagabend manuell schließen, falls die Wochenkerze darunter schließt.</span>",
+                unsafe_allow_html=True,
             )
+            st.markdown(
+                f"🛡️ **Notfall-Stop im Broker:** `${row['EmergencySL_USD']}` | `€{row['EmergencySL_EUR']}` "
+                f"(:red[**-{row['EmergencySL_Dist_Pct']}%**])\n\n"
+                f"<span style='color:gray; font-size:11px;'>👉 Fester Stop-Loss im Broker (3% Puffer gegen Flash-Crashes).</span>",
+                unsafe_allow_html=True,
+            )
+            st.markdown("---")
             st.markdown(
                 f"🏁 **Ziel 1:** `${row['TP1_USD']}` | `€{row['TP1_EUR']}` "
                 f"<span style='color:gray; font-size:11px;'>({row['TP1_Label']})</span>\n\n"
@@ -577,6 +672,10 @@ def render_stock_card(row, key_prefix="card"):
                     "status": "Offen",
                     "entry_price_usd": row["Kurs_USD"],
                     "entry_price_eur": row["Kurs_EUR"],
+                    "invalidation_usd": row["Invalidation_USD"],
+                    "invalidation_eur": row["Invalidation_EUR"],
+                    "emergency_sl_usd": row["EmergencySL_USD"],
+                    "emergency_sl_eur": row["EmergencySL_EUR"],
                     "tp1_usd": row["TP1_USD"],
                     "tp1_eur": row["TP1_EUR"],
                     "tp1_label": row["TP1_Label"],
@@ -592,7 +691,7 @@ def render_stock_card(row, key_prefix="card"):
 # ---------------------------------------------------------------------
 # 7. METRIKEN: HEADERZEILE (AKTIVE TRADES, TP-BEREIT & RISIKO)
 # ---------------------------------------------------------------------
-st.title(f"📈 S&P 500 Trading Hub — ({current_user})")
+st.title(f"📈 S&P 500 & Nasdaq Trading Hub — ({current_user})")
 
 total_active = len(user_trades)
 at_risk_count = 0
@@ -604,21 +703,17 @@ for sym, info in user_trades.items():
         c_price = close_w[sym].dropna().iloc[-1]
         e21_val = ema21_df[sym].dropna().iloc[-1]
 
-        # Stop-Loss Check
         if c_price < e21_val:
             invalidated_count += 1
         elif c_price <= e21_val * 1.015:
             at_risk_count += 1
 
-        # TP Check für Header-Metrik:
         tp1_val = info.get("tp1_usd", 0.0)
         tp2_val = info.get("tp2_usd", 0.0)
         trade_status = str(info.get("status", "Offen"))
 
-        # Wenn Ziel 1 erreicht ist und noch kein 50% TP genommen wurde:
         if trade_status == "Offen" and tp1_val > 0 and c_price >= tp1_val:
             tp_ready_count += 1
-        # Wenn Ziel 2 erreicht ist und 50% bereits gesichert waren, aber noch keine 90%:
         elif "50%" in trade_status and tp2_val > 0 and c_price >= tp2_val:
             tp_ready_count += 1
 
@@ -643,7 +738,7 @@ with m4:
     st.metric(
         label="❌ Invalidiert (Wochenschluss < 21 EMA)",
         value=f"{invalidated_count} Trades",
-        delta="SL greift!" if invalidated_count > 0 else "Keine",
+        delta="Freitagsschluss < 21 EMA" if invalidated_count > 0 else "Keine",
         delta_color="inverse" if invalidated_count > 0 else "off",
     )
 
@@ -776,7 +871,7 @@ with tab1:
                 render_stock_card(row, key_prefix="screener")
 
 # =====================================================================
-# TAB 2: MEINE AKTIVEN TRADES (MIT TP-ZIELEN & STATUS)
+# TAB 2: MEINE AKTIVEN TRADES (MIT TREND- & EMERGENCY-STOP ANZEIGE)
 # =====================================================================
 with tab2:
     if len(user_trades) == 0:
@@ -791,13 +886,15 @@ with tab2:
             curr_eur = curr_usd * usd_to_eur_rate
 
             curr_e10_usd = ema10_df[sym].dropna().iloc[-1]
+            curr_e10_eur = curr_e10_usd * usd_to_eur_rate
+
             curr_e21_usd = ema21_df[sym].dropna().iloc[-1]
             curr_e21_eur = curr_e21_usd * usd_to_eur_rate
 
             entry_usd = info.get("entry_price_usd", curr_usd)
             entry_eur = info.get("entry_price_eur", curr_eur)
 
-            # Gespeicherte Kursziele abrufen
+            # Kursziele abrufen
             tp1_usd = info.get("tp1_usd", curr_usd * 1.10)
             tp1_eur = info.get("tp1_eur", tp1_usd * usd_to_eur_rate)
             tp1_lbl = info.get("tp1_label", "Ziel 1")
@@ -806,20 +903,40 @@ with tab2:
             tp2_eur = info.get("tp2_eur", tp2_usd * usd_to_eur_rate)
             tp2_lbl = info.get("tp2_label", "Ziel 2")
 
-            # Wochenschluss-Invalidierung
-            if curr_usd < curr_e21_usd:
+            # Notfall-Stop
+            em_sl_usd = info.get("emergency_sl_usd", curr_e21_usd * 0.97)
+            em_sl_eur = info.get("emergency_sl_eur", em_sl_usd * usd_to_eur_rate)
+
+            # Dynamische EMA-Farblogik
+            is_invalidated = curr_usd < curr_e21_usd
+            is_below_e10 = curr_usd < curr_e10_usd
+            is_near_e10 = (curr_usd >= curr_e10_usd) and (
+                curr_usd <= curr_e10_usd * 1.015
+            )
+
+            if is_invalidated:
+                ema10_color = "orange"
+                ema21_color = "orange"
                 health = "❌ INVALIDIERT (Wochenschluss unter 21 EMA!)"
                 health_color = "red"
-            elif curr_usd <= curr_e21_usd * 1.015:
-                health = "⚠️ FAST INVALIDIERT (Testet 21 EMA)"
+            elif is_below_e10:
+                ema10_color = "red"
+                ema21_color = "orange"
+                health = "⚠️ KURS UNTER 10 EMA (Testet Richtung 21 EMA)"
                 health_color = "orange"
+            elif is_near_e10:
+                ema10_color = "orange"
+                ema21_color = "green"
+                health = "✅ IM TREND (Testet 10 EMA Support)"
+                health_color = "green"
             else:
-                health = "✅ IM TREND (Über 21 EMA)"
+                ema10_color = "green"
+                ema21_color = "green"
+                health = "✅ IM TREND (Deutlich über 10 EMA)"
                 health_color = "green"
 
             trade_status = info.get("status", "Offen")
 
-            # Dynamischer TP-Hinweis auf der Karte
             if trade_status == "Offen" and curr_usd >= tp1_usd:
                 status_display = (
                     ":orange[**⚡ ZIEL 1 ERREICHT! (50% TP Bereit)**]"
@@ -856,19 +973,18 @@ with tab2:
                 with c2:
                     st.markdown(
                         f"Status: {status_display}\n\n"
-                        f"**Einstieg:** `${entry_usd}` / `€{entry_eur}`\n\n"
-                        f"**Aktuell:** `${round(curr_usd, 2)}` /"
+                        f"**Einstieg:** `${entry_usd}` | `€{entry_eur}`\n\n"
+                        f"**Aktueller Kurs:** `${round(curr_usd, 2)}` |"
                         f" `€{round(curr_eur, 2)}`"
                     )
 
                 with c3:
                     st.markdown(
                         f"Trend: :{health_color}[**{health}**]\n\n"
-                        f"🎯 **TP 1:** `${tp1_usd}` / `€{tp1_eur}` "
-                        f"<span style='color:gray; font-size:11px;'>({tp1_lbl})</span>\n\n"
-                        f"🚀 **TP 2:** `${tp2_usd}` / `€{tp2_eur}` "
-                        f"<span style='color:gray; font-size:11px;'>({tp2_lbl})</span>",
-                        unsafe_allow_html=True,
+                        f"**10 EMA:** :{ema10_color}[${round(curr_e10_usd, 2)} / €{round(curr_e10_eur, 2)}] | "
+                        f"**21 EMA:** :{ema21_color}[${round(curr_e21_usd, 2)} / €{round(curr_e21_eur, 2)}]\n\n"
+                        f"🛡️ **Notfall-Stop (Broker):** `${round(em_sl_usd, 2)}` / `€{round(em_sl_eur, 2)}`\n\n"
+                        f"🎯 **TP 1:** `${tp1_usd}` | 🚀 **TP 2:** `${tp2_usd}`"
                     )
 
                 with c4:
@@ -914,19 +1030,19 @@ with tab3:
                 render_stock_card(row, key_prefix="fav")
 
 # =====================================================================
-# TAB 4: ALLE AKTIEN (SUCHE INKL. APPLE, TESLA, NVIDIA)
+# TAB 4: ALLE AKTIEN (S&P 500 & NASDAQ MARKTÜBERSICHT)
 # =====================================================================
 with tab4:
     st.caption(
-        "Hier findest du alle 500 S&P-Aktien (auch AAPL, NVDA etc., selbst"
-        " wenn sie neutral sind)."
+        "Hier findest du alle qualifizierten S&P 500 & Nasdaq Aktien (> 2"
+        " Mrd. $ Market Cap)."
     )
 
     af1, af2 = st.columns([2, 2])
     with af1:
         search_all = st.text_input(
             "🔍 Suche nach Ticker oder Name:",
-            placeholder="z. B. AAPL, Apple, NVDA, Tesla...",
+            placeholder="z. B. AAPL, NVDA, AMZN, MSFT...",
             key="s_tab4",
         ).strip()
     with af2:
