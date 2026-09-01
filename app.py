@@ -3,10 +3,11 @@
 # =====================================================================
 # Features:
 # - Dynamisches Wikipedia-Scraping (S&P 500 & Nasdaq 100 > 2 Mrd. USD)
-# - Zweistufiger Cache: 24h für Universum, 1h für Marktdaten (Schutz vor API-Sperren)
+# - Zweistufiger Cache: 24h für Universum, 1h für Marktdaten
+# - Tagesgewichtete Volumen-Berechnung (RVOL unter der Woche)
 # - 2-Stufen-Stop: 21 EMA Wochenschluss (Trend) & Notfall-Stop (-3% Broker-Puffer)
 # - Take-Profits: 20W-Hoch / 1:3 CRV, 52W-Hoch / 1:5 CRV, 50er-Schritte bei ATH
-# - Dynamische EMA-Farblogik in 'Meine Trades'
+# - Tab 2: EMAs unter aktuellem Kurs, TP/SL-Anordnung & Durchstreich-Logik
 # =====================================================================
 
 from datetime import datetime
@@ -146,7 +147,7 @@ if st.sidebar.button(
 
 
 # ---------------------------------------------------------------------
-# 4. HILFSFUNKTIONEN
+# 4. HILFSFUNKTIONEN (INKL. DYNAMISCHES VOLUMEN)
 # ---------------------------------------------------------------------
 def get_google_link(ticker: str) -> str:
     query = urllib.parse.quote(f"{ticker} stock price")
@@ -166,8 +167,69 @@ def get_next_50_level(price: float) -> float:
     return float(next_lvl)
 
 
+def calculate_dynamic_volume_ratio(
+    daily_volume_df: pd.DataFrame, weekly_volume_df: pd.DataFrame, ticker: str
+) -> float:
+    """Berechnet das tagesgewichtete Volumenverhältnis (RVOL) basierend auf
+
+    dem bisherigen Wochenfortschritt (Montag bis heute).
+    """
+    if ticker not in daily_volume_df.columns or ticker not in weekly_volume_df.columns:
+        return 1.0
+
+    vol_d = daily_volume_df[ticker].dropna()
+    vol_w = weekly_volume_df[ticker].dropna()
+
+    if len(vol_d) < 15 or len(vol_w) < 5:
+        return 1.0
+
+    # 1. Historische Verteilung nach Wochentagen (0 = Mo, ..., 4 = Fr)
+    recent_daily = vol_d.iloc[-60:].copy()
+    df_vol = pd.DataFrame(
+        {
+            "Volume": recent_daily,
+            "Weekday": recent_daily.index.weekday,
+            "Week": recent_daily.index.to_period("W-FRI"),
+        }
+    )
+
+    week_totals = df_vol.groupby("Week")["Volume"].transform("sum")
+    df_vol["Day_Share"] = df_vol["Volume"] / week_totals
+
+    mean_weekday_shares = df_vol.groupby("Weekday")["Day_Share"].mean()
+
+    # Fallback-Profil für die US-Märkte
+    default_profile = {0: 0.17, 1: 0.19, 2: 0.19, 3: 0.20, 4: 0.25}
+    for day in range(5):
+        if day not in mean_weekday_shares or pd.isna(
+            mean_weekday_shares.get(day)
+        ):
+            mean_weekday_shares[day] = default_profile[day]
+
+    total_share = mean_weekday_shares.loc[0:4].sum()
+    normalized_shares = mean_weekday_shares.loc[0:4] / total_share
+
+    # 2. Erwarteter Anteil bis zum heutigen Tag
+    current_weekday = min(datetime.now().weekday(), 4)
+    cumulative_expected_share = normalized_shares.loc[0:current_weekday].sum()
+
+    # 3. Durchschnittliches 10-Wochen-Volumen
+    avg_full_week_vol = (
+        vol_w.iloc[-11:-1].mean()
+        if len(vol_w) >= 11
+        else vol_w.iloc[:-1].mean()
+    )
+
+    expected_vol_to_date = avg_full_week_vol * cumulative_expected_share
+    current_week_vol = vol_w.iloc[-1]
+
+    if expected_vol_to_date > 0 and pd.notna(current_week_vol):
+        return round(float(current_week_vol / expected_vol_to_date), 2)
+    return 1.0
+
+
 # ---------------------------------------------------------------------
-# 5. DATEN-ENGINE: ZWEISTUFIGER CACHE MIT DYNAMISCHER TABELLENERKENNUNG
+# 5. DATEN-ENGINE: ZWEISTUFIGER CACHE
 # ---------------------------------------------------------------------
 @st.cache_data(
     ttl=86400,
@@ -177,7 +239,8 @@ def get_qualified_universe(min_market_cap_usd=2_000_000_000):
     """Lädt S&P 500 und Nasdaq dynamisch und filtert Werte >= 2 Mrd. USD (24h Cache)."""
     headers = {
         "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            " (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
         )
     }
 
@@ -216,7 +279,7 @@ def get_qualified_universe(min_market_cap_usd=2_000_000_000):
     except Exception as e:
         st.warning(f"Hinweis: S&P 500 Liste konnte nicht geladen werden: {e}")
 
-    # 2. Nasdaq-100 Liste dynamisch durchsuchen (Behebt den 'Ticker'-Fehler)
+    # 2. Nasdaq-100 Liste dynamisch durchsuchen
     try:
         nasdaq_url = "https://en.wikipedia.org/wiki/Nasdaq-100"
         nasdaq_res = requests.get(nasdaq_url, headers=headers, timeout=15)
@@ -318,8 +381,6 @@ def load_screener_data():
     signal_line = macd_line.ewm(span=9, adjust=False).mean()
     macd_hist = macd_line - signal_line
 
-    vol_sma10 = vol_w.rolling(window=10).mean()
-
     high_20w = high_w.rolling(window=20, min_periods=5).max()
     high_52w = high_w.rolling(window=52, min_periods=10).max()
     high_ath = high_w.max()
@@ -358,9 +419,8 @@ def load_screener_data():
             ) * 100.0
         rs_score = round(stock_12w_perf - spy_12w_perf, 2)
 
-        curr_vol = vol_w[sym].iloc[-1]
-        avg_vol = vol_sma10[sym].iloc[-1]
-        vol_ratio = round(curr_vol / avg_vol, 2) if avg_vol > 0 else 1.0
+        # Dynamisches tagesgewichtetes Volumenverhältnis abrufen
+        vol_ratio = calculate_dynamic_volume_ratio(vol_d, vol_w, sym)
 
         macd_rising = m_hist > m_hist_prev
         trend_bullish = e10_usd > e21_usd
@@ -393,7 +453,7 @@ def load_screener_data():
         entry_min_usd = e10_usd
         entry_max_usd = e10_usd * 1.015
 
-        # 1. BEREIT (Vorwoche mit Körper über 10 EMA geschlossen)
+        # 1. BEREIT
         if prev_body_above_10ema and price_above_ema21 and macd_rising:
             if crossover_event:
                 status = "BEREIT"
@@ -428,8 +488,8 @@ def load_screener_data():
             entry_max_usd = e10_usd * 1.015
 
         # 2-Stufen-Stop
-        invalidation_usd = e21_usd  # Wochenschluss unter 21 EMA
-        emergency_sl_usd = e21_usd * 0.97  # Fester Broker-Stop mit 3% Puffer
+        invalidation_usd = e21_usd
+        emergency_sl_usd = e21_usd * 0.97
         risk_per_share_usd = max(c_usd - emergency_sl_usd, c_usd * 0.02)
 
         # Take-Profit Logik
@@ -592,7 +652,7 @@ def render_stock_card(row, key_prefix="card"):
     else:
         status_tag = ":gray[**NEUTRAL**]"
 
-    # Positionsgrößen-Berechnung basierend auf dem Notfall-Stop
+    # Positionsgrößen-Berechnung basierend auf Notfall-Stop
     risk_in_usd = (
         max_risk_amount / usd_to_eur_rate
         if account_currency == "EUR (€)"
@@ -895,7 +955,7 @@ with tab1:
                 render_stock_card(row, key_prefix="screener")
 
 # =====================================================================
-# TAB 2: MEINE AKTIVEN TRADES (MIT TREND- & EMERGENCY-STOP ANZEIGE)
+# TAB 2: MEINE AKTIVEN TRADES (ANGEPASSTE POSITIONIERUNG & DURCHSTREICH-LOGIK)
 # =====================================================================
 with tab2:
     if len(user_trades) == 0:
@@ -959,8 +1019,9 @@ with tab2:
                 health = "✅ IM TREND (Deutlich über 10 EMA)"
                 health_color = "green"
 
-            trade_status = info.get("status", "Offen")
+            trade_status = str(info.get("status", "Offen"))
 
+            # Status-Badge ermitteln
             if trade_status == "Offen" and curr_usd >= tp1_usd:
                 status_display = (
                     ":orange[**⚡ ZIEL 1 ERREICHT! (50% TP Bereit)**]"
@@ -978,12 +1039,30 @@ with tab2:
             else:
                 status_display = f"**{trade_status}**"
 
+            # Dynamische Durchstreich-Logik für TPs
+            is_50_saved = "50%" in trade_status
+            is_90_saved = "90%" in trade_status
+
+            tp1_raw = f"🎯 **TP 1:** `${tp1_usd}` | `€{tp1_eur}` <span style='color:gray; font-size:11px;'>({tp1_lbl})</span>"
+            tp2_raw = f"🚀 **TP 2:** `${tp2_usd}` | `€{tp2_eur}` <span style='color:gray; font-size:11px;'>({tp2_lbl})</span>"
+
+            if is_90_saved:
+                tp1_formatted = f"<s>{tp1_raw}</s> ✅ *(realisiert)*"
+                tp2_formatted = f"<s>{tp2_raw}</s> ✅ *(realisiert)*"
+            elif is_50_saved:
+                tp1_formatted = f"<s>{tp1_raw}</s> ✅ *(realisiert)*"
+                tp2_formatted = tp2_raw
+            else:
+                tp1_formatted = tp1_raw
+                tp2_formatted = tp2_raw
+
             google_link = get_google_link(sym)
             tv_link = get_tradingview_link(sym)
 
             with st.container(border=True):
                 c1, c2, c3, c4, c5 = st.columns([1.5, 2.5, 2.5, 2, 1])
 
+                # SPALTE 1: Ticker & Links
                 with c1:
                     st.markdown(
                         f"<span style='color:gray;"
@@ -994,23 +1073,27 @@ with tab2:
                     st.caption(f"Einstieg: {info.get('entry_date', '-')}")
                     st.link_button("📊 Chart", tv_link)
 
+                # SPALTE 2: Status, Einstieg, Aktueller Kurs & EMAs darunter
                 with c2:
                     st.markdown(
                         f"Status: {status_display}\n\n"
                         f"**Einstieg:** `${entry_usd}` | `€{entry_eur}`\n\n"
-                        f"**Aktueller Kurs:** `${round(curr_usd, 2)}` |"
-                        f" `€{round(curr_eur, 2)}`"
+                        f"**Aktueller Kurs:** `${round(curr_usd, 2)}` | `€{round(curr_eur, 2)}`\n\n"
+                        f"**10 EMA:** :{ema10_color}[${round(curr_e10_usd, 2)} / €{round(curr_e10_eur, 2)}] | "
+                        f"**21 EMA:** :{ema21_color}[${round(curr_e21_usd, 2)} / €{round(curr_e21_eur, 2)}]"
                     )
 
+                # SPALTE 3: Trend, Take-Profits & Notfall-Stop
                 with c3:
                     st.markdown(
                         f"Trend: :{health_color}[**{health}**]\n\n"
-                        f"**10 EMA:** :{ema10_color}[${round(curr_e10_usd, 2)} / €{round(curr_e10_eur, 2)}] | "
-                        f"**21 EMA:** :{ema21_color}[${round(curr_e21_usd, 2)} / €{round(curr_e21_eur, 2)}]\n\n"
-                        f"🛡️ **Notfall-Stop (Broker):** `${round(em_sl_usd, 2)}` / `€{round(em_sl_eur, 2)}`\n\n"
-                        f"🎯 **TP 1:** `${tp1_usd}` | 🚀 **TP 2:** `${tp2_usd}`"
+                        f"{tp1_formatted}\n\n"
+                        f"{tp2_formatted}\n\n"
+                        f"🛡️ **Notfall-Stop (Broker):** `${round(em_sl_usd, 2)}` | `€{round(em_sl_eur, 2)}`",
+                        unsafe_allow_html=True,
                     )
 
+                # SPALTE 4: Teilgewinn-Buttons
                 with c4:
                     if st.button("💰 50% TP sichern", key=f"tp50_{sym}"):
                         all_users_data[current_user]["trades"][sym]["status"] = (
@@ -1025,6 +1108,7 @@ with tab2:
                         save_user_data(all_users_data)
                         st.rerun()
 
+                # SPALTE 5: Close-Button
                 with c5:
                     if st.button(
                         "🗑️ Close",
