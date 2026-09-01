@@ -1,15 +1,12 @@
 # =====================================================================
-# S&P 500 & NASDAQ WEEKLY EMA STACK & MACD TRADING HUB PRO (PRO-ENTRY)
+# S&P 500 & NASDAQ WEEKLY EMA STACK & MACD TRADING HUB PRO (OPTIMIERT)
 # =====================================================================
 # Features:
-# - SPY Markt-Regime-Filter (Bullen-/Bärenmarkt-Erkennung)
-# - NEU: Einstiegs-Nähe-Klassifizierung (Dunkelgrün = Optimal, Hellgrün = Nah)
-# - NEU: Standard-Sortierung nach optimalem Einstiegsabstand zur 10 EMA
-# - NEU: Schnellfilter für Einstiegszonen (<= 3.0% Abstand)
-# - 12-Wochen Relative-Stärke-Ranking (RS-Score)
-# - Zweistufiger Cache: 24h für Universum, 1h für Marktdaten
-# - 2.0% Risiko-Rechner mit 20% Allokationsgrenze
-# - 2-Stufen-Stop: 21 EMA Wochenschluss (Trend) & Notfall-Stop (-3% Broker)
+# - Robuste EUR/USD Wechselkurs-Ermittlung & transparente Umrechnung
+# - Theme-freundliches Layout (Lesbar in Light- und Dark-Mode)
+# - Empfohlene Einstiegszone prominent oben auf jeder Karte
+# - Diskrete Tagesperformance-Anzeige oben rechts
+# - SPY Markt-Regime-Filter & 12-Wochen RS-Score
 # - Break-Even Stop nach TP 1 & interaktive Toggle-Buttons in Tab 2
 # =====================================================================
 
@@ -221,7 +218,7 @@ def calculate_dynamic_volume_ratio(
 
 
 # ---------------------------------------------------------------------
-# 5. DATEN-ENGINE (SPY REGIME-FILTER, RS-SCORE & EINSTIEGS-NÄHE)
+# 5. DATEN-ENGINE (ROBUSTER WECHSELKURS, MARKTFILTER & INDIKATOREN)
 # ---------------------------------------------------------------------
 @st.cache_data(
     ttl=86400,
@@ -231,6 +228,7 @@ def get_qualified_universe(min_market_cap_usd=2_000_000_000):
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            " (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
         )
     }
     company_names = {}
@@ -317,13 +315,32 @@ def get_qualified_universe(min_market_cap_usd=2_000_000_000):
 def load_screener_data():
     symbols, company_names, company_sectors = get_qualified_universe()
 
+    # -------------------------------------------------------------
+    # ROBUSTE WECHSELKURS-BERECHNUNG (EURUSD=X)
+    # EURUSD=X gibt an: Wie viel USD kostet 1 EUR (z.B. 1 EUR = 1.085 USD)
+    # 1 USD in EUR ist demnach = 1.0 / (EURUSD Kurs)
+    # -------------------------------------------------------------
+    eur_usd_pair_price = 1.08  # Realistischer Standardwert
     try:
-        fx_data = yf.download(
-            "EURUSD=X", period="5d", interval="1d", progress=False
-        )
-        usd_to_eur_rate = 1.0 / float(fx_data["Close"].iloc[-1])
+        fx_ticker = yf.Ticker("EURUSD=X")
+        fx_fast = fx_ticker.fast_info.get("last_price", None)
+        if fx_fast is not None and fx_fast > 0:
+            eur_usd_pair_price = float(fx_fast)
+        else:
+            fx_data = yf.download(
+                "EURUSD=X", period="5d", interval="1d", progress=False
+            )
+            if not fx_data.empty:
+                c_series = (
+                    fx_data["Close"]["EURUSD=X"]
+                    if "EURUSD=X" in fx_data["Close"]
+                    else fx_data["Close"]
+                )
+                eur_usd_pair_price = float(c_series.dropna().iloc[-1])
     except Exception:
-        usd_to_eur_rate = 0.92
+        eur_usd_pair_price = 1.08
+
+    usd_to_eur_rate = 1.0 / eur_usd_pair_price
 
     download_symbols = symbols + ["SPY"]
     raw = yf.download(
@@ -362,7 +379,7 @@ def load_screener_data():
     high_52w = high_w.rolling(window=52, min_periods=10).max()
     ath_rolling = high_w.cummax()
 
-    # SPY Markt-Regime-Prüfung
+    # SPY Markt-Regime
     spy_market_bullish = False
     spy_12w_perf = 0.0
     spy_close_val = 0.0
@@ -404,7 +421,7 @@ def load_screener_data():
         m_hist = macd_hist[sym].iloc[-1]
         m_hist_prev = macd_hist[sym].iloc[-2]
 
-        # 12-Wochen Relative Stärke (RS-Score)
+        # 12-Wochen Relative Stärke
         stock_12w_perf = 0.0
         if len(series_close) >= 13:
             stock_12w_perf = (
@@ -446,7 +463,6 @@ def load_screener_data():
         entry_min_usd = e10_usd
         entry_max_usd = e10_usd * 1.015
 
-        # 1. BEREIT
         if prev_body_above_10ema and price_above_ema21 and macd_rising:
             if crossover_event:
                 status = "BEREIT"
@@ -463,7 +479,6 @@ def load_screener_data():
                 entry_min_usd = e10_usd if retest_ema10_event else e21_usd
                 entry_max_usd = entry_min_usd * 1.015
 
-        # 2. FAST BEREIT
         elif near_crossover_event:
             status = "FAST BEREIT"
             typ = "10/21 EMA Crossover steht bevor (<1.5%)"
@@ -480,28 +495,18 @@ def load_screener_data():
             entry_min_usd = e10_usd
             entry_max_usd = e10_usd * 1.015
 
-        # -------------------------------------------------------------
-        # NEU: EINSTIEGS-NÄHE BERECHNEN & KLASSIFIZIEREN
-        # -------------------------------------------------------------
-        # Prozentualer Abstand des aktuellen Kurses zur 10 EMA
+        # Einstiegs-Nähe Einstufung
         dist_from_10ema_pct = ((c_usd - e10_usd) / e10_usd) * 100.0
 
-        # Klassifizierung:
-        # OPTIMAL: Zwischen -0.5% und +1.5% an der 10 EMA (perfekte Kaufzone)
-        # NAH: Zwischen +1.5% und +3.0% (leicht überdehnt, aber noch nah)
-        # WEIT: > +3.0% oder < -1.5%
         if -0.5 <= dist_from_10ema_pct <= 1.5:
             entry_grade = "OPTIMAL"
-            entry_color_badge = "darkgreen"
-            entry_desc = f"🎯 Optimal ({dist_from_10ema_pct:+.1f}% zur 10 EMA)"
+            entry_desc = f"Optimal ({dist_from_10ema_pct:+.1f}%)"
         elif 1.5 < dist_from_10ema_pct <= 3.0:
             entry_grade = "NAH"
-            entry_color_badge = "lightgreen"
-            entry_desc = f"⚡ Nahe Zone ({dist_from_10ema_pct:+.1f}% zur 10 EMA)"
+            entry_desc = f"Nah ({dist_from_10ema_pct:+.1f}%)"
         else:
             entry_grade = "WEIT"
-            entry_color_badge = "gray"
-            entry_desc = f"⚠️ Überdehnt ({dist_from_10ema_pct:+.1f}% zur 10 EMA)"
+            entry_desc = f"Überdehnt ({dist_from_10ema_pct:+.1f}%)"
 
         # 2-Stufen-Stop
         invalidation_usd = e21_usd
@@ -597,7 +602,6 @@ def load_screener_data():
                 "Dist_Entry_Pct": round(dist_from_10ema_pct, 2),
                 "Dist_Abs_10EMA": dist_ema10_pct,
                 "Entry_Grade": entry_grade,
-                "Entry_Color_Badge": entry_color_badge,
                 "Entry_Desc": entry_desc,
                 "RS Score": rs_score,
                 "MACD Hist": round(m_hist, 3),
@@ -609,7 +613,6 @@ def load_screener_data():
 
     df = pd.DataFrame(results)
 
-    # Standard-Sortierung: Absoluter Abstand zur 10 EMA (geringster zuerst)
     if not df.empty:
         df = df.sort_values(by="Dist_Abs_10EMA", ascending=True)
 
@@ -621,13 +624,14 @@ def load_screener_data():
         company_names,
         daily_change_pct,
         usd_to_eur_rate,
+        eur_usd_pair_price,
         spy_market_bullish,
         spy_close_val,
         spy_e21_val,
     )
 
 
-# Daten abrufen
+# Daten laden
 (
     df_all_stocks,
     close_w,
@@ -636,16 +640,21 @@ def load_screener_data():
     company_names,
     daily_change_pct,
     usd_to_eur_rate,
+    eur_usd_pair_price,
     spy_market_bullish,
     spy_close_val,
     spy_e21_val,
 ) = load_screener_data()
 
-st.sidebar.caption(f"Wechselkurs: **1 USD = {usd_to_eur_rate:.4f} EUR**")
+st.sidebar.caption(
+    f"💱 **Wechselkurs Live:**\n\n"
+    f"• 1 EUR = **{eur_usd_pair_price:.4f} USD**\n\n"
+    f"• 1 USD = **{usd_to_eur_rate:.4f} EUR**"
+)
 
 
 # ---------------------------------------------------------------------
-# 6. MODULARE KARTEN-DARSTELLUNG (KOMPAKTES & DEZENTES STYLING)
+# 6. MODULARE KARTEN-DARSTELLUNG (OPTIMIERTES LAYOUT & FARBEN)
 # ---------------------------------------------------------------------
 def render_stock_card(row, key_prefix="card"):
     sym = row["Aktie"]
@@ -658,7 +667,7 @@ def render_stock_card(row, key_prefix="card"):
     change_color = "green" if d_change >= 0 else "red"
     change_sign = "+" if d_change >= 0 else ""
 
-    # Volumen-Badge
+    # Volumen Badge
     vol_badge = (
         f":green[**{row['Volumen Ratio']}x**]"
         if row["Volumen Ratio"] >= 1.0
@@ -679,38 +688,29 @@ def render_stock_card(row, key_prefix="card"):
         status_tag = ":gray[**NEUTRAL**]"
 
     # -----------------------------------------------------------------
-    # NEU: DEZENTE, SCHLANKE BADGES FÜR KURS & ABSTAND
+    # THEME-SICHERE FARB-BADGES (FÜR LIGHT- & DARK-MODE)
     # -----------------------------------------------------------------
     if row["Entry_Grade"] == "OPTIMAL":
-        # Dezentes Waldgrün (Kompakt)
-        badge_style = (
-            "background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; "
-            "padding: 2px 7px; border-radius: 4px; font-size: 11.5px; font-weight: 600;"
+        badge_html = (
+            "<span style='background: rgba(22, 163, 74, 0.18); color: #22c55e;"
+            " border: 1px solid rgba(34, 197, 94, 0.4); padding: 1px 6px;"
+            " border-radius: 4px; font-size: 11px; font-weight: 700;'>"
+            f"🎯 OPTIMAL ({row['Dist_Entry_Pct']:+.1f}%)</span>"
         )
-        tag_text = "🎯 Optimal"
     elif row["Entry_Grade"] == "NAH":
-        # Sanftes Salbeigrün (Kompakt)
-        badge_style = (
-            "background: #f7fee7; color: #3f6212; border: 1px solid #d9f99d; "
-            "padding: 2px 7px; border-radius: 4px; font-size: 11.5px; font-weight: 600;"
+        badge_html = (
+            "<span style='background: rgba(132, 204, 22, 0.18); color: #84cc16;"
+            " border: 1px solid rgba(132, 204, 22, 0.4); padding: 1px 6px;"
+            " border-radius: 4px; font-size: 11px; font-weight: 700;'>"
+            f"⚡ NAH ({row['Dist_Entry_Pct']:+.1f}%)</span>"
         )
-        tag_text = "⚡ Nah"
     else:
-        # Neutrales Schiefergrau
-        badge_style = (
-            "background: #f8fafc; color: #64748b; border: 1px solid #e2e8f0; "
-            "padding: 2px 7px; border-radius: 4px; font-size: 11.5px; font-weight: 500;"
+        badge_html = (
+            "<span style='background: rgba(148, 163, 184, 0.15); color: #94a3b8;"
+            " border: 1px solid rgba(148, 163, 184, 0.3); padding: 1px 6px;"
+            " border-radius: 4px; font-size: 11px;'>"
+            f"⚠️ Überdehnt ({row['Dist_Entry_Pct']:+.1f}%)</span>"
         )
-        tag_text = "Überdehnt"
-
-    kurs_html = (
-        f"<div style='display: flex; align-items: center; gap: 8px; margin: 4px 0 6px 0;'>"
-        f"  <span style='font-size: 14px; font-weight: 700; color: #0f172a;'>"
-        f"    ${row['Kurs_USD']} <span style='font-size: 12px; font-weight: 400; color: #64748b;'>(€{row['Kurs_EUR']})</span>"
-        f"  </span>"
-        f"  <span style='{badge_style}'>{tag_text} ({row['Dist_Entry_Pct']:+.1f}%)</span>"
-        f"</div>"
-    )
 
     # Positionsgrößen-Berechnung (2.0% Risiko vs. 20% Cap)
     risk_in_usd = (
@@ -732,36 +732,60 @@ def render_stock_card(row, key_prefix="card"):
     pos_vol_eur = pos_vol_usd * usd_to_eur_rate
 
     with st.container(border=True):
-        h_left, h_right = st.columns([3.5, 1])
-        with h_left:
-            st.markdown(
-                f"<span style='color:gray; font-size:12px;'>{row['Name']} • {row['Sektor']}</span>",
-                unsafe_allow_html=True,
-            )
-            st.markdown(f"### **[{sym}]({google_link})** — {status_tag}")
-        with h_right:
-            fav_label = "⭐" if is_fav else "✩"
-            if st.button(
-                fav_label,
-                key=f"fav_{key_prefix}_{sym}",
-                help="Zu Favoriten hinzufügen / entfernen",
-            ):
-                if is_fav:
-                    all_users_data[current_user]["favorites"].remove(sym)
-                else:
-                    all_users_data[current_user]["favorites"].append(sym)
-                save_user_data(all_users_data)
-                st.rerun()
-
-        st.caption(f"Setup: **{row['Typ']}** | {rs_badge}")
-
-        # Schlanke Kurs- und Abstandszeile einbetten
-        st.markdown(kurs_html, unsafe_allow_html=True)
+        # 1. ZEILE: NAME & SEKTOR
         st.markdown(
-            f"Heute: :{change_color}[**{change_sign}{d_change}%**] | "
-            f"Volumen: {vol_badge}"
+            f"<span style='color:gray; font-size:11.5px;'>{row['Name']} • {row['Sektor']}</span>",
+            unsafe_allow_html=True,
         )
 
+        # 2. ZEILE: TICKER + STATUS-TAG LINKS, TAGESÄNDERUNG & FAVORIT RECHTS
+        h_left, h_right = st.columns([3, 1.2])
+        with h_left:
+            st.markdown(
+                f"### **[{sym}]({google_link})** — {status_tag}",
+                unsafe_allow_html=True,
+            )
+        with h_right:
+            fav_label = "⭐" if is_fav else "✩"
+            b_fav, b_chg = st.columns([1, 2])
+            with b_fav:
+                if st.button(
+                    fav_label,
+                    key=f"fav_{key_prefix}_{sym}",
+                    help="Zu Favoriten hinzufügen",
+                ):
+                    if is_fav:
+                        all_users_data[current_user]["favorites"].remove(sym)
+                    else:
+                        all_users_data[current_user]["favorites"].append(sym)
+                    save_user_data(all_users_data)
+                    st.rerun()
+            with b_chg:
+                st.markdown(
+                    f"<div style='text-align:right; font-size:12px; margin-top:6px;'>"
+                    f":{change_color}[**{change_sign}{d_change}%**]</div>",
+                    unsafe_allow_html=True,
+                )
+
+        # 3. ZEILE: EMPFOHLENER EINSTIEG PROMINENT OBEN
+        st.markdown(
+            f"<div style='background: rgba(37, 99, 235, 0.10); border-left: 3px solid #2563eb; padding: 4px 8px; border-radius: 4px; margin: 4px 0 8px 0; font-size: 12px;'>"
+            f"🎯 <b>Kaufzone (10 EMA):</b> <code>${row['EntryZone_Min_USD']} - ${row['EntryZone_Max_USD']}</code> "
+            f"<i>(€{row['EntryZone_Min_EUR']} - €{row['EntryZone_Max_EUR']})</i>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+        # 4. ZEILE: AKTUELLER KURS + EINSTIEGS-BADGE
+        st.markdown(
+            f"**Kurs:** `${row['Kurs_USD']}` *(€{row['Kurs_EUR']})* &nbsp; {badge_html}",
+            unsafe_allow_html=True,
+        )
+
+        # 5. ZEILE: SETUP-TYP & RELATIVE STÄRKE
+        st.caption(f"Setup: **{row['Typ']}** | {rs_badge}")
+
+        # 6. ZEILE: EMAs, MACD & VOLUMEN
         ema10_col = "green" if row["Kurs_USD"] > row["EMA10_USD"] else "red"
         ema21_col = "green" if row["Kurs_USD"] > row["EMA21_USD"] else "red"
 
@@ -769,13 +793,12 @@ def render_stock_card(row, key_prefix="card"):
             f"**10 EMA:** :{ema10_col}[${row['EMA10_USD']}] | **21 EMA:**"
             f" :{ema21_col}[${row['EMA21_USD']}]"
         )
+        st.markdown(
+            f"**MACD Hist:** `{row['MACD Hist']}` | **Vol:** {vol_badge}"
+        )
 
-        with st.expander("🎯 Trade-Plan, Stops & Kursziele"):
-            st.markdown(
-                f"🎯 **Einstiegszone (nahe 10 EMA):** `${row['EntryZone_Min_USD']} - ${row['EntryZone_Max_USD']}` "
-                f"*(€{row['EntryZone_Min_EUR']} - €{row['EntryZone_Max_EUR']})*"
-            )
-            st.markdown("---")
+        # 7. AUSKLAPPBARER TRADE-PLAN
+        with st.expander("🎯 Stops, Kursziele & Stückzahl"):
             st.markdown(
                 f"⚠️ **Trend-Invalidierung:** Wochenschluss `< ${row['Invalidation_USD']}` *(€{row['Invalidation_EUR']})*\n\n"
                 f"<span style='color:gray; font-size:11px;'>👉 Erst am Freitagabend manuell schließen, falls die Wochenkerze darunter schließt.</span>",
@@ -832,7 +855,7 @@ def render_stock_card(row, key_prefix="card"):
 
 
 # ---------------------------------------------------------------------
-# 7. HEADER & MARKT-AMPEL (SPY REGIME-STATUS)
+# 7. HEADER & MARKT-AMPEL
 # ---------------------------------------------------------------------
 st.title(f"📈 Weekly Trading Hub Pro — ({current_user})")
 
@@ -935,7 +958,6 @@ with tab1:
             key="sec_tab1",
         )
     with f3:
-        # NEU: Sortieroptionen mit Fokus auf optimale Einstiegsnähe
         sort_by = st.selectbox(
             "↕️ Sortieren nach:",
             options=[
@@ -954,7 +976,6 @@ with tab1:
             "⚠️ FAST BEREIT", value=True, key="chk_fast"
         )
     with f5:
-        # NEU: Checkbox-Filter für nahe und optimale Einstiege
         only_near_entries = st.checkbox(
             "🎯 Nur Nahe & Optimal (≤ 3.0%)",
             value=False,
@@ -998,11 +1019,10 @@ with tab1:
     elif sort_by == "🚀 Beste Tagesperformance (%)":
         f_df = f_df.sort_values(by="DailyChange", ascending=False)
     else:
-        # Standard: Geringster absoluter Abstand zur 10 EMA zuerst
         f_df = f_df.sort_values(by="Dist_Abs_10EMA", ascending=True)
 
     st.caption(
-        f"Gefundene Setups: **{len(f_df)}** (Automatisch nach bestem Einstiegspreis"
+        f"Gefundene Setups: **{len(f_df)}** (Automatisch nach bester Einstiegszone"
         " geordnet)"
     )
 
@@ -1058,7 +1078,6 @@ with tab2:
             entry_usd = info.get("entry_price_usd", curr_usd)
             entry_eur = info.get("entry_price_eur", curr_eur)
 
-            # Kursziele abrufen
             tp1_usd = info.get("tp1_usd", curr_usd * 1.10)
             tp1_eur = info.get("tp1_eur", tp1_usd * usd_to_eur_rate)
             tp1_lbl = info.get("tp1_label", "Ziel 1")
@@ -1071,7 +1090,6 @@ with tab2:
             is_50_saved = "50%" in trade_status
             is_90_saved = "90%" in trade_status
 
-            # Dynamischer Notfall-Stop (Break-Even Absicherung nach TP1)
             if is_50_saved or is_90_saved:
                 em_sl_usd = max(entry_usd, curr_e21_usd * 0.97)
                 sl_label = "🛡️ Break-Even Stop (Broker)"
@@ -1081,7 +1099,6 @@ with tab2:
 
             em_sl_eur = em_sl_usd * usd_to_eur_rate
 
-            # Dynamische EMA-Farblogik
             is_invalidated = curr_usd < curr_e21_usd
             is_below_e10 = curr_usd < curr_e10_usd
             is_near_e10 = (curr_usd >= curr_e10_usd) and (
@@ -1109,7 +1126,6 @@ with tab2:
                 health = "✅ IM TREND (Deutlich über 10 EMA)"
                 health_color = "green"
 
-            # Status-Badge ermitteln
             if trade_status == "Offen" and curr_usd >= tp1_usd:
                 status_display = (
                     ":orange[**⚡ ZIEL 1 ERREICHT! (50% TP Bereit)**]"
@@ -1129,7 +1145,6 @@ with tab2:
             else:
                 status_display = f"**{trade_status}**"
 
-            # Dynamische Durchstreich-Formatierung
             tp1_raw = f"🎯 **TP 1:** `${tp1_usd}` | `€{tp1_eur}` <span style='color:gray; font-size:11px;'>({tp1_lbl})</span>"
             tp2_raw = f"🚀 **TP 2:** `${tp2_usd}` | `€{tp2_eur}` <span style='color:gray; font-size:11px;'>({tp2_lbl})</span>"
 
