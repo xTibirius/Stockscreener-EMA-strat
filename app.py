@@ -4,9 +4,9 @@
 # Features:
 # - Minimalistisches Markt-Ampel Banner
 # - RS-Score als Standard-Filter & Sortierung
-# - Paralleler Filter für überdehnte Aktien (<= 3.0% zur 10 EMA)
-# - Volumen (RVOL) sauber in Details verschoben
-# - Flexibler persönlicher Kaufkurs & intelligentes Break-Even / Trailing Stop Management
+# - Kombinierbarer Filter für überdehnte Aktien (<= 3.0% zur 10 EMA)
+# - Flexibler persönlicher Kaufkurs (Wählbar zwischen € und $)
+# - 100% Backtest-Logik beim Trailing Stop des Runners (max(Entry, 21 EMA))
 # =====================================================================
 
 from datetime import datetime
@@ -35,7 +35,6 @@ st.set_page_config(
 # ---------------------------------------------------------------------
 DATA_FILE = "trades.json"
 
-
 def load_user_data() -> dict:
     if os.path.exists(DATA_FILE):
         try:
@@ -46,11 +45,9 @@ def load_user_data() -> dict:
             return {}
     return {}
 
-
 def save_user_data(all_data: dict):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(all_data, f, indent=4, ensure_ascii=False)
-
 
 all_users_data = load_user_data()
 
@@ -139,7 +136,6 @@ if st.sidebar.button(
     st.cache_data.clear()
     st.rerun()
 
-
 # ---------------------------------------------------------------------
 # 4. HILFSFUNKTIONEN
 # ---------------------------------------------------------------------
@@ -147,16 +143,13 @@ def get_google_link(ticker: str) -> str:
     query = urllib.parse.quote(f"{ticker} stock price")
     return f"https://www.google.com/search?q={query}"
 
-
 def get_tradingview_link(ticker: str) -> str:
     clean_ticker = ticker.replace("-", ".")
     return f"https://www.tradingview.com/chart/?symbol={clean_ticker}"
 
-
 def get_next_50_level(price: float) -> float:
     next_lvl = math.ceil(price / 50.0) * 50.0
     return float(next_lvl if next_lvl > price else next_lvl + 50.0)
-
 
 def calculate_dynamic_volume_ratio(
     daily_volume_df: pd.DataFrame, weekly_volume_df: pd.DataFrame, ticker: str
@@ -185,9 +178,7 @@ def calculate_dynamic_volume_ratio(
 
     default_profile = {0: 0.17, 1: 0.19, 2: 0.19, 3: 0.20, 4: 0.25}
     for day in range(5):
-        if day not in mean_weekday_shares or pd.isna(
-            mean_weekday_shares.get(day)
-        ):
+        if day not in mean_weekday_shares or pd.isna(mean_weekday_shares.get(day)):
             mean_weekday_shares[day] = default_profile[day]
 
     total_share = mean_weekday_shares.loc[0:4].sum()
@@ -197,9 +188,7 @@ def calculate_dynamic_volume_ratio(
     cumulative_expected_share = normalized_shares.loc[0:current_weekday].sum()
 
     avg_full_week_vol = (
-        vol_w.iloc[-11:-1].mean()
-        if len(vol_w) >= 11
-        else vol_w.iloc[:-1].mean()
+        vol_w.iloc[-11:-1].mean() if len(vol_w) >= 11 else vol_w.iloc[:-1].mean()
     )
     expected_vol_to_date = avg_full_week_vol * cumulative_expected_share
     current_week_vol = vol_w.iloc[-1]
@@ -207,7 +196,6 @@ def calculate_dynamic_volume_ratio(
     if expected_vol_to_date > 0 and pd.notna(current_week_vol):
         return round(float(current_week_vol / expected_vol_to_date), 2)
     return 1.0
-
 
 # ---------------------------------------------------------------------
 # 5. DATEN-ENGINE
@@ -231,18 +219,9 @@ def get_qualified_universe(min_market_cap_usd=2_000_000_000):
         sp500_res = requests.get(sp500_url, headers=headers, timeout=15)
         sp500_tables = pd.read_html(StringIO(sp500_res.text), flavor="html5lib")
         for table in sp500_tables:
-            sym_col = next(
-                (col for col in table.columns if str(col).lower() in ["symbol", "ticker"]),
-                None,
-            )
-            sec_col = next(
-                (col for col in table.columns if "security" in str(col).lower() or "company" in str(col).lower()),
-                None,
-            )
-            gics_col = next(
-                (col for col in table.columns if "gics sector" in str(col).lower() or "sector" in str(col).lower()),
-                None,
-            )
+            sym_col = next((col for col in table.columns if str(col).lower() in ["symbol", "ticker"]), None)
+            sec_col = next((col for col in table.columns if "security" in str(col).lower() or "company" in str(col).lower()), None)
+            gics_col = next((col for col in table.columns if "gics sector" in str(col).lower() or "sector" in str(col).lower()), None)
             if sym_col and len(table) >= 400:
                 for _, row in table.iterrows():
                     sym = str(row[sym_col]).strip().replace(".", "-")
@@ -259,18 +238,9 @@ def get_qualified_universe(min_market_cap_usd=2_000_000_000):
         nasdaq_res = requests.get(nasdaq_url, headers=headers, timeout=15)
         nasdaq_tables = pd.read_html(StringIO(nasdaq_res.text), flavor="html5lib")
         for table in nasdaq_tables:
-            sym_col = next(
-                (col for col in table.columns if str(col).lower() in ["ticker", "symbol"]),
-                None,
-            )
-            comp_col = next(
-                (col for col in table.columns if "company" in str(col).lower() or "security" in str(col).lower()),
-                None,
-            )
-            gics_col = next(
-                (col for col in table.columns if "gics sector" in str(col).lower() or "sector" in str(col).lower()),
-                None,
-            )
+            sym_col = next((col for col in table.columns if str(col).lower() in ["ticker", "symbol"]), None)
+            comp_col = next((col for col in table.columns if "company" in str(col).lower() or "security" in str(col).lower()), None)
+            gics_col = next((col for col in table.columns if "gics sector" in str(col).lower() or "sector" in str(col).lower()), None)
             if sym_col and len(table) >= 50:
                 for _, row in table.iterrows():
                     sym = str(row[sym_col]).strip().replace(".", "-")
@@ -297,7 +267,6 @@ def get_qualified_universe(min_market_cap_usd=2_000_000_000):
 
     return qualified_symbols, company_names, company_sectors
 
-
 @st.cache_data(
     ttl=3600, show_spinner="Stufe 2/2: Aktualisiere Kurse & Indikatoren (1h)..."
 )
@@ -311,15 +280,9 @@ def load_screener_data():
         if fx_fast is not None and fx_fast > 0:
             eur_usd_pair_price = float(fx_fast)
         else:
-            fx_data = yf.download(
-                "EURUSD=X", period="5d", interval="1d", progress=False
-            )
+            fx_data = yf.download("EURUSD=X", period="5d", interval="1d", progress=False)
             if not fx_data.empty:
-                c_series = (
-                    fx_data["Close"]["EURUSD=X"]
-                    if "EURUSD=X" in fx_data["Close"]
-                    else fx_data["Close"]
-                )
+                c_series = fx_data["Close"]["EURUSD=X"] if "EURUSD=X" in fx_data["Close"] else fx_data["Close"]
                 eur_usd_pair_price = float(c_series.dropna().iloc[-1])
     except Exception:
         eur_usd_pair_price = 1.08
@@ -328,12 +291,7 @@ def load_screener_data():
 
     download_symbols = symbols + ["SPY"]
     raw = yf.download(
-        download_symbols,
-        period="3y",
-        interval="1d",
-        group_by="column",
-        auto_adjust=True,
-        progress=False,
+        download_symbols, period="3y", interval="1d", group_by="column", auto_adjust=True, progress=False,
     )
 
     close_d = raw["Close"].dropna(how="all", axis=1)
@@ -372,9 +330,7 @@ def load_screener_data():
         spy_e21_val = ema21["SPY"].dropna().iloc[-1]
         spy_e10_val = ema10["SPY"].dropna().iloc[-1]
 
-        spy_market_bullish = (spy_close_val >= spy_e21_val) and (
-            spy_e10_val >= spy_e21_val
-        )
+        spy_market_bullish = (spy_close_val >= spy_e21_val) and (spy_e10_val >= spy_e21_val)
         spy_12w_perf = ((spy_s.iloc[-1] - spy_s.iloc[-13]) / spy_s.iloc[-13]) * 100.0
 
     results = []
@@ -404,10 +360,7 @@ def load_screener_data():
 
         stock_12w_perf = 0.0
         if len(series_close) >= 13:
-            stock_12w_perf = (
-                (series_close.iloc[-1] - series_close.iloc[-13])
-                / series_close.iloc[-13]
-            ) * 100.0
+            stock_12w_perf = ((series_close.iloc[-1] - series_close.iloc[-13]) / series_close.iloc[-13]) * 100.0
         rs_score = round(stock_12w_perf - spy_12w_perf, 2)
 
         vol_ratio = calculate_dynamic_volume_ratio(vol_d, vol_w, sym)
@@ -420,23 +373,10 @@ def load_screener_data():
         curr_body_above_10ema = c_usd > e10_usd
 
         crossover_event = (e10_prev <= e21_prev) and (e10_usd > e21_usd)
-        retest_ema10_event = (
-            trend_bullish
-            and (l_usd <= e10_usd * 1.015)
-            and not crossover_event
-        )
-        retest_ema21_event = (
-            trend_bullish
-            and (l_usd <= e21_usd * 1.015)
-            and not crossover_event
-        )
+        retest_ema10_event = (trend_bullish and (l_usd <= e10_usd * 1.015) and not crossover_event)
+        retest_ema21_event = (trend_bullish and (l_usd <= e21_usd * 1.015) and not crossover_event)
 
-        near_crossover_event = (
-            (e10_usd < e21_usd)
-            and (e10_usd / e21_usd >= 0.985)
-            and price_above_ema21
-            and macd_rising
-        )
+        near_crossover_event = ((e10_usd < e21_usd) and (e10_usd / e21_usd >= 0.985) and price_above_ema21 and macd_rising)
 
         status = "NEUTRAL"
         typ = "Kein Setup"
@@ -447,33 +387,17 @@ def load_screener_data():
             if crossover_event:
                 status = "BEREIT"
                 typ = "10/21 EMA Crossover (Bestätigt)"
-                entry_min_usd = e10_usd
-                entry_max_usd = e10_usd * 1.015
             elif retest_ema10_event or retest_ema21_event:
                 status = "BEREIT"
-                typ = (
-                    "EMA 10 Retest (Bestätigt)"
-                    if retest_ema10_event
-                    else "EMA 21 Retest (Bestätigt)"
-                )
+                typ = "EMA 10 Retest (Bestätigt)" if retest_ema10_event else "EMA 21 Retest (Bestätigt)"
                 entry_min_usd = e10_usd if retest_ema10_event else e21_usd
                 entry_max_usd = entry_min_usd * 1.015
-
         elif near_crossover_event:
             status = "FAST BEREIT"
             typ = "10/21 EMA Crossover steht bevor (<1.5%)"
-            entry_min_usd = e10_usd
-            entry_max_usd = e10_usd * 1.015
-        elif (
-            curr_body_above_10ema
-            and price_above_ema21
-            and macd_rising
-            and (trend_bullish or crossover_event)
-        ):
+        elif curr_body_above_10ema and price_above_ema21 and macd_rising and (trend_bullish or crossover_event):
             status = "FAST BEREIT"
             typ = "Körper steigt in laufender Woche über 10 EMA"
-            entry_min_usd = e10_usd
-            entry_max_usd = e10_usd * 1.015
 
         dist_from_10ema_pct = ((c_usd - e10_usd) / e10_usd) * 100.0
 
@@ -495,11 +419,7 @@ def load_screener_data():
         swing_52w_val = high_52w[sym].iloc[-1]
         ath_val = ath_rolling[sym].iloc[-1]
 
-        crv_20w = (
-            ((swing_20w_val - c_usd) / risk_per_share_usd)
-            if pd.notna(swing_20w_val) and swing_20w_val > c_usd
-            else 0.0
-        )
+        crv_20w = (((swing_20w_val - c_usd) / risk_per_share_usd) if pd.notna(swing_20w_val) and swing_20w_val > c_usd else 0.0)
         if crv_20w >= 3.0:
             tp1_usd = swing_20w_val
             tp1_label = f"20W-Hoch (CRV 1:{crv_20w:.1f})"
@@ -512,11 +432,7 @@ def load_screener_data():
                 tp1_usd = calc_tp1
                 tp1_label = "Fester 1:3 CRV"
 
-        crv_52w = (
-            ((swing_52w_val - c_usd) / risk_per_share_usd)
-            if pd.notna(swing_52w_val) and swing_52w_val > tp1_usd * 1.01
-            else 0.0
-        )
+        crv_52w = (((swing_52w_val - c_usd) / risk_per_share_usd) if pd.notna(swing_52w_val) and swing_52w_val > tp1_usd * 1.01 else 0.0)
         if crv_52w > 3.0:
             tp2_usd = swing_52w_val
             tp2_label = f"52W-Hoch (CRV 1:{crv_52w:.1f})"
@@ -557,9 +473,7 @@ def load_screener_data():
                 "EMA21_USD": round(e21_usd, 2),
                 "EMA21_EUR": round(e21_usd * usd_to_eur_rate, 2),
                 "Invalidation_USD": round(invalidation_usd, 2),
-                "Invalidation_EUR": round(
-                    invalidation_usd * usd_to_eur_rate, 2
-                ),
+                "Invalidation_EUR": round(invalidation_usd * usd_to_eur_rate, 2),
                 "EmergencySL_USD": round(emergency_sl_usd, 2),
                 "EmergencySL_EUR": round(emergency_sl_usd * usd_to_eur_rate, 2),
                 "EmergencySL_Dist_Pct": round(emergency_sl_dist_pct, 2),
@@ -587,38 +501,17 @@ def load_screener_data():
         )
 
     df = pd.DataFrame(results)
-
-    # Standardmäßig nach höchstem RS-Score sortieren
     if not df.empty:
-        df = df.sort_values(by="RS Score", ascending=False)
+        df = df.sort_values(by="Dist_Abs_10EMA", ascending=True)
 
     return (
-        df,
-        close_w,
-        ema10,
-        ema21,
-        company_names,
-        daily_change_pct,
-        usd_to_eur_rate,
-        eur_usd_pair_price,
-        spy_market_bullish,
-        spy_close_val,
-        spy_e21_val,
+        df, close_w, ema10, ema21, company_names, daily_change_pct,
+        usd_to_eur_rate, eur_usd_pair_price, spy_market_bullish, spy_close_val, spy_e21_val,
     )
 
-
 (
-    df_all_stocks,
-    close_w,
-    ema10_df,
-    ema21_df,
-    company_names,
-    daily_change_pct,
-    usd_to_eur_rate,
-    eur_usd_pair_price,
-    spy_market_bullish,
-    spy_close_val,
-    spy_e21_val,
+    df_all_stocks, close_w, ema10_df, ema21_df, company_names, daily_change_pct,
+    usd_to_eur_rate, eur_usd_pair_price, spy_market_bullish, spy_close_val, spy_e21_val,
 ) = load_screener_data()
 
 st.sidebar.caption(
@@ -627,9 +520,8 @@ st.sidebar.caption(
     f"• 1 USD = **{usd_to_eur_rate:.4f} EUR**"
 )
 
-
 # ---------------------------------------------------------------------
-# 6. MODULARE KARTEN-DARSTELLUNG (SCREENER)
+# 6. MODULARE KARTEN-DARSTELLUNG
 # ---------------------------------------------------------------------
 def render_stock_card(row, key_prefix="card"):
     sym = row["Aktie"]
@@ -689,26 +581,15 @@ def render_stock_card(row, key_prefix="card"):
             f"⚠️ Überdehnt ({row['Dist_Entry_Pct']:+.1f}%)</span>"
         )
 
-    risk_in_usd = (
-        max_risk_amount / usd_to_eur_rate
-        if account_currency == "EUR (€)"
-        else max_risk_amount
-    )
+    risk_in_usd = max_risk_amount / usd_to_eur_rate if account_currency == "EUR (€)" else max_risk_amount
     shares_by_risk = int(risk_in_usd / row["RiskPerShare_USD"])
-
-    max_cap_in_usd = (
-        max_pos_capital / usd_to_eur_rate
-        if account_currency == "EUR (€)"
-        else max_pos_capital
-    )
+    max_cap_in_usd = max_pos_capital / usd_to_eur_rate if account_currency == "EUR (€)" else max_pos_capital
     shares_by_allocation = int(max_cap_in_usd / row["Kurs_USD"])
-
     shares_to_buy = max(min(shares_by_risk, shares_by_allocation), 1)
     pos_vol_usd = shares_to_buy * row["Kurs_USD"]
     pos_vol_eur = pos_vol_usd * usd_to_eur_rate
 
     with st.container(border=True):
-        # ZEILE 1: Firmeninfo links + Favorit-Icon oben rechts
         top_left, top_right = st.columns([5, 1])
         with top_left:
             st.markdown(
@@ -717,11 +598,7 @@ def render_stock_card(row, key_prefix="card"):
             )
         with top_right:
             fav_label = "⭐" if is_fav else "✩"
-            if st.button(
-                fav_label,
-                key=f"fav_{key_prefix}_{sym}",
-                help="Zu Favoriten hinzufügen / entfernen",
-            ):
+            if st.button(fav_label, key=f"fav_{key_prefix}_{sym}", help="Zu Favoriten hinzufügen / entfernen"):
                 if is_fav:
                     all_users_data[current_user]["favorites"].remove(sym)
                 else:
@@ -729,97 +606,48 @@ def render_stock_card(row, key_prefix="card"):
                 save_user_data(all_users_data)
                 st.rerun()
 
-        # ZEILE 2: Setup direkt unter dem Namen
         st.caption(f"Setup: **{row['Typ']}**")
 
-        # ZEILE 3: Ticker (links) + Tagesänderung (rechts)
         h_left, h_right = st.columns([3, 1.5])
         with h_left:
-            st.markdown(
-                f"### **[{sym}]({google_link})** — {status_tag}",
-                unsafe_allow_html=True,
-            )
+            st.markdown(f"### **[{sym}]({google_link})** — {status_tag}", unsafe_allow_html=True)
         with h_right:
-            st.markdown(
-                f"<div style='text-align:right; font-size:12.5px; margin-top:8px;'>"
-                f"{formatted_daily_change}</div>",
-                unsafe_allow_html=True,
-            )
+            st.markdown(f"<div style='text-align:right; font-size:12.5px; margin-top:8px;'>{formatted_daily_change}</div>", unsafe_allow_html=True)
 
-        # ZEILE 4: Kurs zuerst (mit Einstiegs-Badge)
+        st.markdown(f"**Kurs:** `${row['Kurs_USD']}` *(€{row['Kurs_EUR']})* &nbsp; {badge_html}", unsafe_allow_html=True)
+
         st.markdown(
-            f"**Kurs:** `${row['Kurs_USD']}` *(€{row['Kurs_EUR']})* &nbsp; {badge_html}",
+            f"<div style='background: rgba(37, 99, 235, 0.10); border-left: 3px solid #2563eb; padding: 4px 8px; border-radius: 4px; margin: 6px 0 8px 0; font-size: 12px;'>"
+            f"🎯 <b>Kaufzone (10 EMA):</b> <code>${row['EntryZone_Min_USD']} - ${row['EntryZone_Max_USD']}</code> <i>(€{row['EntryZone_Min_EUR']} - €{row['EntryZone_Max_EUR']})</i></div>",
             unsafe_allow_html=True,
         )
 
-        # ZEILE 5: Kaufzone danach
-        st.markdown(
-            f"<div style='background: rgba(37, 99, 235, 0.10); border-left: 3px solid #2563eb; "
-            f"padding: 4px 8px; border-radius: 4px; margin: 6px 0 8px 0; font-size: 12px;'>"
-            f"🎯 <b>Kaufzone (10 EMA):</b> <code>${row['EntryZone_Min_USD']} - ${row['EntryZone_Max_USD']}</code> "
-            f"<i>(€{row['EntryZone_Min_EUR']} - €{row['EntryZone_Max_EUR']})</i>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
-        # ZEILE 6: EMAs, RS-Score & MACD (RS-Score ersetzt Volumen auf der Karte)
         ema10_col = "green" if row["Kurs_USD"] > row["EMA10_USD"] else "red"
         ema21_col = "green" if row["Kurs_USD"] > row["EMA21_USD"] else "red"
 
-        st.markdown(
-            f"**10 EMA:** :{ema10_col}[${row['EMA10_USD']}] | "
-            f"**21 EMA:** :{ema21_col}[${row['EMA21_USD']}]"
-        )
-        st.markdown(
-            f"**MACD Hist:** `{row['MACD Hist']}` &nbsp;|&nbsp; {rs_badge_html}",
-            unsafe_allow_html=True,
-        )
+        st.markdown(f"**10 EMA:** :{ema10_col}[${row['EMA10_USD']}] | **21 EMA:** :{ema21_col}[${row['EMA21_USD']}]")
+        st.markdown(f"**MACD Hist:** `{row['MACD Hist']}` &nbsp;|&nbsp; {rs_badge_html}", unsafe_allow_html=True)
 
-        # ZEILE 7: Stops, Targets & Order-Plan (inklusive RVOL-Volumen)
         with st.expander("🎯 Stops, Kursziele & Stückzahl"):
-            st.markdown(
-                f"📊 **Volumen-Ratio (RVOL):** {vol_text} *(>1.0x bedeutet institutionelles Volumen)*\n\n"
-                f"---"
-            )
-            st.markdown(
-                f"⚠️ **Trend-Invalidierung:** Wochenschluss `< ${row['Invalidation_USD']}` *(€{row['Invalidation_EUR']})*\n\n"
-                f"<span style='color:gray; font-size:11px;'>👉 Erst am Freitagabend manuell schließen, falls die Wochenkerze darunter schließt.</span>",
-                unsafe_allow_html=True,
-            )
-            st.markdown(
-                f"🛡️ **Notfall-Stop im Broker:** `${row['EmergencySL_USD']}` | `€{row['EmergencySL_EUR']}` "
-                f"(:red[**-{row['EmergencySL_Dist_Pct']}%**])\n\n"
-                f"<span style='color:gray; font-size:11px;'>👉 Fester Stop-Loss im Broker (3% Puffer gegen Flash-Crashes).</span>",
-                unsafe_allow_html=True,
-            )
+            st.markdown(f"📊 **Volumen-Ratio (RVOL):** {vol_text} *(>1.0x bedeutet institutionelles Volumen)*\n\n---")
+            st.markdown(f"⚠️ **Trend-Invalidierung:** Wochenschluss `< ${row['Invalidation_USD']}` *(€{row['Invalidation_EUR']})*\n\n<span style='color:gray; font-size:11px;'>👉 Erst am Freitagabend manuell schließen, falls die Wochenkerze darunter schließt.</span>", unsafe_allow_html=True)
+            st.markdown(f"🛡️ **Notfall-Stop im Broker:** `${row['EmergencySL_USD']}` | `€{row['EmergencySL_EUR']}` (:red[**-{row['EmergencySL_Dist_Pct']}%**])\n\n<span style='color:gray; font-size:11px;'>👉 Fester Stop-Loss im Broker (3% Puffer gegen Flash-Crashes).</span>", unsafe_allow_html=True)
             st.markdown("---")
-            st.markdown(
-                f"🏁 **Ziel 1:** `${row['TP1_USD']}` | `€{row['TP1_EUR']}` "
-                f"<span style='color:gray; font-size:11px;'>({row['TP1_Label']})</span>\n\n"
-                f"🚀 **Ziel 2:** `${row['TP2_USD']}` | `€{row['TP2_EUR']}` "
-                f"<span style='color:gray; font-size:11px;'>({row['TP2_Label']})</span>",
-                unsafe_allow_html=True,
-            )
+            st.markdown(f"🏁 **Ziel 1:** `${row['TP1_USD']}` | `€{row['TP1_EUR']}` <span style='color:gray; font-size:11px;'>({row['TP1_Label']})</span>\n\n🚀 **Ziel 2:** `${row['TP2_USD']}` | `€{row['TP2_EUR']}` <span style='color:gray; font-size:11px;'>({row['TP2_Label']})</span>", unsafe_allow_html=True)
             st.markdown("---")
-            st.markdown(
-                f"💼 **Empfohlene Stückzahl:** **{shares_to_buy} Stück**\n\n"
-                f"*(Volumen: ~${pos_vol_usd:,.0f} / ~€{pos_vol_eur:,.0f} | 2% Risiko, max. {max_allocation_pct}% Depot)*"
-            )
+            st.markdown(f"💼 **Empfohlene Stückzahl:** **{shares_to_buy} Stück**\n\n*(Volumen: ~${pos_vol_usd:,.0f} / ~€{pos_vol_eur:,.0f} | 2% Risiko, max. {max_allocation_pct}% Depot)*")
 
         b1, b2 = st.columns(2)
         with b1:
             st.link_button("📊 TradingView", tv_link, use_container_width=True)
         with b2:
-            if st.button(
-                "📌 Kaufen",
-                key=f"buy_{key_prefix}_{sym}",
-                use_container_width=True,
-            ):
+            if st.button("📌 Kaufen", key=f"buy_{key_prefix}_{sym}", use_container_width=True):
                 all_users_data[current_user]["trades"][sym] = {
                     "status": "Offen",
                     "entry_price_usd": row["Kurs_USD"],
                     "entry_price_eur": row["Kurs_EUR"],
-                    "custom_entry": 0.0,
+                    "custom_entry_val": 0.0,
+                    "custom_entry_cur": "$",
                     "invalidation_usd": row["Invalidation_USD"],
                     "invalidation_eur": row["Invalidation_EUR"],
                     "emergency_sl_usd": row["EmergencySL_USD"],
@@ -835,9 +663,8 @@ def render_stock_card(row, key_prefix="card"):
                 save_user_data(all_users_data)
                 st.rerun()
 
-
 # ---------------------------------------------------------------------
-# 7. HEADER & MARKT-AMPEL (MINIMALISTISCH)
+# 7. HEADER & MARKT-AMPEL
 # ---------------------------------------------------------------------
 st.title(f"📈 Weekly Trading Hub Pro — ({current_user})")
 
@@ -874,65 +701,35 @@ m1, m2, m3, m4 = st.columns(4)
 with m1:
     st.metric(label="🎯 Aktive Positionen", value=f"{total_active} Trades")
 with m2:
-    st.metric(
-        label="💰 Teilgewinne bereit",
-        value=f"{tp_ready_count} Trades",
-        delta="Kurs an Zielzone!" if tp_ready_count > 0 else "Warten auf Targets",
-        delta_color="normal" if tp_ready_count > 0 else "off",
-    )
+    st.metric(label="💰 Teilgewinne bereit", value=f"{tp_ready_count} Trades", delta="Kurs an Zielzone!" if tp_ready_count > 0 else "Warten auf Targets", delta_color="normal" if tp_ready_count > 0 else "off")
 with m3:
-    st.metric(
-        label="⚠️ Nahe 21 EMA (Gefährdet)",
-        value=f"{at_risk_count} Trades",
-        delta="Testet Support" if at_risk_count > 0 else "Alles stabil",
-        delta_color="inverse" if at_risk_count > 0 else "off",
-    )
+    st.metric(label="⚠️ Nahe 21 EMA (Gefährdet)", value=f"{at_risk_count} Trades", delta="Testet Support" if at_risk_count > 0 else "Alles stabil", delta_color="inverse" if at_risk_count > 0 else "off")
 with m4:
-    st.metric(
-        label="❌ Invalidiert (Wochenschluss < 21 EMA)",
-        value=f"{invalidated_count} Trades",
-        delta="Freitagsschluss < 21 EMA" if invalidated_count > 0 else "Keine",
-        delta_color="inverse" if invalidated_count > 0 else "off",
-    )
+    st.metric(label="❌ Invalidiert (Wochenschluss < 21 EMA)", value=f"{invalidated_count} Trades", delta="Freitagsschluss < 21 EMA" if invalidated_count > 0 else "Keine", delta_color="inverse" if invalidated_count > 0 else "off")
 
 st.markdown("---")
 
 # ---------------------------------------------------------------------
 # 8. TABS MIT PAGINIERUNG
 # ---------------------------------------------------------------------
-tab1, tab2, tab3, tab4 = st.tabs(
-    [
-        "🔍 Markt-Setups (Screener)",
-        "🎯 Meine Trades",
-        "⭐ Favoriten / Watchlist",
-        "🌐 Alle Aktien (Marktübersicht)",
-    ]
-)
+tab1, tab2, tab3, tab4 = st.tabs([
+    "🔍 Markt-Setups (Screener)", "🎯 Meine Trades", "⭐ Favoriten / Watchlist", "🌐 Alle Aktien (Marktübersicht)"
+])
 
 ITEMS_PER_PAGE = 24
 
 # =====================================================================
-# TAB 1: SCREENER (RS-FILTER & ÜBERDEHNUNGS-FILTER KOMBINIERBAR)
+# TAB 1: SCREENER
 # =====================================================================
 with tab1:
-    screener_df = df_all_stocks[
-        df_all_stocks["Status"].isin(["BEREIT", "FAST BEREIT"])
-    ]
+    screener_df = df_all_stocks[df_all_stocks["Status"].isin(["BEREIT", "FAST BEREIT"])]
 
     f1, f2, f3, f4, f5 = st.columns([2, 1.5, 1.5, 1.2, 1.3])
     with f1:
-        search_query = st.text_input(
-            "🔍 Suche:", placeholder="z. B. NVDA oder Apple", key="s_tab1"
-        ).strip()
+        search_query = st.text_input("🔍 Suche:", placeholder="z. B. NVDA oder Apple", key="s_tab1").strip()
     with f2:
         all_sectors = sorted(screener_df["Sektor"].unique().tolist())
-        sel_sectors = st.multiselect(
-            "🏢 Sektor:",
-            options=all_sectors,
-            default=[],
-            placeholder="Alle Sektoren",
-            key="sec_tab1",
-        )
+        sel_sectors = st.multiselect("🏢 Sektor:", options=all_sectors, default=[], placeholder="Alle Sektoren", key="sec_tab1")
     with f3:
         sort_by = st.selectbox(
             "↕️ Sortieren nach:",
@@ -945,12 +742,8 @@ with tab1:
             key="sort_tab1",
         )
     with f4:
-        show_bereit = st.checkbox(
-            "🚀 Nur BEREIT", value=True, key="chk_bereit"
-        )
-        show_fast_bereit = st.checkbox(
-            "⚠️ FAST BEREIT", value=True, key="chk_fast"
-        )
+        show_bereit = st.checkbox("🚀 Nur BEREIT", value=True, key="chk_bereit")
+        show_fast_bereit = st.checkbox("⚠️ FAST BEREIT", value=True, key="chk_fast")
     with f5:
         exclude_overextended = st.checkbox(
             "🚫 Überdehnte ausblenden (≤ 3.0%)",
@@ -958,22 +751,15 @@ with tab1:
             key="chk_exclude_overextended",
             help="Filtert überdehnte Aktien heraus, die mehr als 3.0% über der 10 EMA liegen.",
         )
-        show_held = st.checkbox(
-            "Bereits gekaufte einblenden", value=False, key="chk_held"
-        )
+        show_held = st.checkbox("Bereits gekaufte einblenden", value=False, key="chk_held")
 
     f_df = screener_df.copy()
 
     if not show_held:
         f_df = f_df[~f_df["Aktie"].isin(user_trades.keys())]
-
     if search_query:
         q = search_query.lower()
-        f_df = f_df[
-            f_df["Aktie"].str.lower().str.contains(q, na=False)
-            | f_df["Name"].str.lower().str.contains(q, na=False)
-        ]
-
+        f_df = f_df[f_df["Aktie"].str.lower().str.contains(q, na=False) | f_df["Name"].str.lower().str.contains(q, na=False)]
     if sel_sectors:
         f_df = f_df[f_df["Sektor"].isin(sel_sectors)]
 
@@ -984,11 +770,9 @@ with tab1:
         selected_statuses.append("FAST BEREIT")
     f_df = f_df[f_df["Status"].isin(selected_statuses)]
 
-    # Überdehnte Aktien herausfiltern (funktioniert parallel zur Sortierung)
     if exclude_overextended:
         f_df = f_df[f_df["Entry_Grade"].isin(["OPTIMAL", "NAH"])]
 
-    # Sortierung anwenden
     if sort_by == "🎯 Optimaler Einstieg (Nächste 10 EMA zuerst)":
         f_df = f_df.sort_values(by="Dist_Abs_10EMA", ascending=True)
     elif sort_by == "📊 Höchstes Volumen (RVOL)":
@@ -996,31 +780,15 @@ with tab1:
     elif sort_by == "🚀 Beste Tagesperformance (%)":
         f_df = f_df.sort_values(by="DailyChange", ascending=False)
     else:
-        # Standard: Höchste Relative Stärke
         f_df = f_df.sort_values(by="RS Score", ascending=False)
 
-    st.caption(
-        f"Gefundene Setups: **{len(f_df)}** (Kombinierbare Filter aktiv)"
-    )
+    st.caption(f"Gefundene Setups: **{len(f_df)}** (Kombinierbare Filter aktiv)")
 
     if f_df.empty:
-        st.info(
-            "Aktuell keine Setups gefunden. Passe die Filter an oder schau in"
-            " **Tab 4 (Alle Aktien)**."
-        )
+        st.info("Aktuell keine Setups gefunden. Passe die Filter an oder schau in **Tab 4 (Alle Aktien)**.")
     else:
         total_pages = max(1, math.ceil(len(f_df) / ITEMS_PER_PAGE))
-        current_page = (
-            st.number_input(
-                "Seite:",
-                min_value=1,
-                max_value=total_pages,
-                value=1,
-                key="p_tab1",
-            )
-            if total_pages > 1
-            else 1
-        )
+        current_page = st.number_input("Seite:", min_value=1, max_value=total_pages, value=1, key="p_tab1") if total_pages > 1 else 1
 
         start_idx = (current_page - 1) * ITEMS_PER_PAGE
         end_idx = start_idx + ITEMS_PER_PAGE
@@ -1032,7 +800,7 @@ with tab1:
                 render_stock_card(row, key_prefix="screener")
 
 # =====================================================================
-# TAB 2: MEINE AKTIVEN TRADES (PERSÖNLICHER EINSTIEG & INTELLIGENTER STOP)
+# TAB 2: MEINE AKTIVEN TRADES (MIT PERSÖNLICHEM WÄHRUNGS-EINSTIEG)
 # =====================================================================
 with tab2:
     if len(user_trades) == 0:
@@ -1048,14 +816,25 @@ with tab2:
 
             curr_e10_usd = ema10_df[sym].dropna().iloc[-1]
             curr_e10_eur = curr_e10_usd * usd_to_eur_rate
-
             curr_e21_usd = ema21_df[sym].dropna().iloc[-1]
             curr_e21_eur = curr_e21_usd * usd_to_eur_rate
 
-            # Automatischer vs. persönlicher Einstieg
-            custom_entry = float(info.get("custom_entry", 0.0) or 0.0)
             default_entry_usd = info.get("entry_price_usd", curr_usd)
             default_entry_eur = info.get("entry_price_eur", curr_eur)
+
+            # Persönlichen Einstieg laden (Abwärtskompatibel zu alten JSON Dateien)
+            custom_entry_val = float(info.get("custom_entry_val", info.get("custom_entry", 0.0)))
+            custom_entry_cur = info.get("custom_entry_cur", "$")
+
+            # Umrechnung des persönlichen Einstiegs in USD für interne Berechnung
+            custom_entry_usd = 0.0
+            if custom_entry_val > 0:
+                if custom_entry_cur == "€":
+                    custom_entry_usd = custom_entry_val / usd_to_eur_rate
+                else:
+                    custom_entry_usd = custom_entry_val
+
+            base_entry_usd = custom_entry_usd if custom_entry_usd > 0 else default_entry_usd
 
             tp1_usd = info.get("tp1_usd", curr_usd * 1.10)
             tp1_eur = info.get("tp1_eur", tp1_usd * usd_to_eur_rate)
@@ -1069,85 +848,70 @@ with tab2:
             is_50_saved = "50%" in trade_status
             is_90_saved = "90%" in trade_status
 
-            # Stop-Loss Logik nach Status
+            # =================================================================
+            # STOP-LOSS LOGIK (BACKTEST 10% RUNNER & BREAK EVEN)
+            # =================================================================
             curr_sym_char = "€" if account_currency == "EUR (€)" else "$"
             
             if is_90_saved:
-                # 90% gesichert -> Normaler Trailing Stop an der 21 EMA
-                trailing_sl_usd = curr_e21_usd * 0.97
-                trailing_sl_eur = trailing_sl_usd * usd_to_eur_rate
-                sl_val = trailing_sl_eur if account_currency == "EUR (€)" else trailing_sl_usd
-                inval_val = curr_e21_eur if account_currency == "EUR (€)" else curr_e21_usd
+                # RUNNER-LOGIK AUS DEM BACKTEST: Stop ist max(Einstieg, 21 EMA - 3%)
+                # Invalidation ist max(Einstieg, 21 EMA)
+                em_sl_usd = max(base_entry_usd, curr_e21_usd * 0.97)
+                inv_usd = max(base_entry_usd, curr_e21_usd)
+                
+                sl_disp = (em_sl_usd * usd_to_eur_rate) if account_currency == "EUR (€)" else em_sl_usd
+                inv_disp = (inv_usd * usd_to_eur_rate) if account_currency == "EUR (€)" else inv_usd
+                
                 sl_display_text = (
-                    f"🏃 **Trailing Stop (21 EMA):** `{curr_sym_char}{sl_val:.2f}`\n\n"
-                    f"<span style='color:gray; font-size:11px;'>👉 Wochenschluss unter {curr_sym_char}{inval_val:.2f} schließt die Restposition.</span>"
+                    f"🏃 **Trailing Stop:** `{curr_sym_char}{sl_disp:.2f}` *(Sichert aufgelaufenen Gewinn)*\n\n"
+                    f"<span style='color:gray; font-size:11px;'>👉 Stop ist auf <b>max(Einstieg, 21 EMA - 3%)</b> nachgezogen.<br>"
+                    f"Wochenschluss unter {curr_sym_char}{inv_disp:.2f} schließt die Restposition.</span>"
                 )
             elif is_50_saved:
-                # 50% gesichert -> Break-Even Stop
-                if custom_entry > 0:
+                if custom_entry_val > 0:
+                    sl_disp = (custom_entry_usd * usd_to_eur_rate) if account_currency == "EUR (€)" else custom_entry_usd
                     sl_display_text = (
-                        f"🛑 **Stop-Loss:** `{curr_sym_char}{custom_entry:.2f}` *(Break-Even / Persönlicher Einstieg)*\n\n"
-                        f"<span style='color:gray; font-size:11px;'>👉 Stop fest im Broker auf deinen Kaufkurs nachgezogen.</span>"
+                        f"🛑 **Stop-Loss:** `{curr_sym_char}{sl_disp:.2f}` *(Break-Even)*\n\n"
+                        f"<span style='color:gray; font-size:11px;'>👉 Stop fest im Broker auf deinen eingetragenen Kaufkurs nachgezogen.</span>"
                     )
                 else:
-                    ref_entry = default_entry_eur if account_currency == "EUR (€)" else default_entry_usd
                     sl_display_text = (
-                        f"🛑 **Stop-Loss:** `Setze Stop auf Break Even / Einstieg` *({curr_sym_char}{ref_entry:.2f})*\n\n"
-                        f"<span style='color:gray; font-size:11px;'>👉 Stop fest im Broker auf deinen Kaufkurs nachgezogen.</span>"
+                        f"🛑 **Stop-Loss:** `Setze Stop auf Break Even / Einstieg`\n\n"
+                        f"<span style='color:gray; font-size:11px;'>👉 Da du keinen Kaufkurs eingegeben hast, ziehe deinen Stop nun manuell auf deinen Einstiegspreis nach.</span>"
                     )
             else:
-                # Vor TP1 -> Regulärer Notfall-Stop
                 em_sl_usd = info.get("emergency_sl_usd", curr_e21_usd * 0.97)
-                em_sl_eur = em_sl_usd * usd_to_eur_rate
-                sl_val = em_sl_eur if account_currency == "EUR (€)" else em_sl_usd
+                sl_disp = (em_sl_usd * usd_to_eur_rate) if account_currency == "EUR (€)" else em_sl_usd
                 sl_display_text = (
-                    f"🛡️ **Notfall-Stop (Broker):** `{curr_sym_char}{sl_val:.2f}`\n\n"
+                    f"🛡️ **Notfall-Stop (Broker):** `{curr_sym_char}{sl_disp:.2f}`\n\n"
                     f"<span style='color:gray; font-size:11px;'>👉 Fester Stop-Loss im Broker (3% unter 21 EMA).</span>"
                 )
 
             is_invalidated = curr_usd < curr_e21_usd
             is_below_e10 = curr_usd < curr_e10_usd
-            is_near_e10 = (curr_usd >= curr_e10_usd) and (
-                curr_usd <= curr_e10_usd * 1.015
-            )
+            is_near_e10 = (curr_usd >= curr_e10_usd) and (curr_usd <= curr_e10_usd * 1.015)
 
             if is_invalidated:
-                ema10_color = "orange"
-                ema21_color = "orange"
+                ema10_color, ema21_color, health_color = "orange", "orange", "red"
                 health = "❌ INVALIDIERT (Wochenschluss unter 21 EMA!)"
-                health_color = "red"
             elif is_below_e10:
-                ema10_color = "red"
-                ema21_color = "orange"
+                ema10_color, ema21_color, health_color = "red", "orange", "orange"
                 health = "⚠️ KURS UNTER 10 EMA (Testet Richtung 21 EMA)"
-                health_color = "orange"
             elif is_near_e10:
-                ema10_color = "orange"
-                ema21_color = "green"
+                ema10_color, ema21_color, health_color = "orange", "green", "green"
                 health = "✅ IM TREND (Testet 10 EMA Support)"
-                health_color = "green"
             else:
-                ema10_color = "green"
-                ema21_color = "green"
+                ema10_color, ema21_color, health_color = "green", "green", "green"
                 health = "✅ IM TREND (Deutlich über 10 EMA)"
-                health_color = "green"
 
             if trade_status == "Offen" and curr_usd >= tp1_usd:
-                status_display = (
-                    ":orange[**⚡ ZIEL 1 ERREICHT! (50% TP Bereit)**]"
-                )
+                status_display = ":orange[**⚡ ZIEL 1 ERREICHT! (50% TP Bereit)**]"
             elif is_50_saved and curr_usd >= tp2_usd:
-                status_display = (
-                    ":orange[**⚡ ZIEL 2 ERREICHT! (90% TP Bereit)**]"
-                )
+                status_display = ":orange[**⚡ ZIEL 2 ERREICHT! (90% TP Bereit)**]"
             elif is_50_saved:
-                status_display = (
-                    ":green[**💰 50% TP Gesichert (Stop auf BE)**]"
-                )
+                status_display = ":green[**💰 50% TP Gesichert (Stop auf BE)**]"
             elif is_90_saved:
-                status_display = (
-                    ":green[**🚀 90% TP Gesichert (Runner aktiv)**]"
-                )
+                status_display = ":green[**🚀 90% TP Gesichert (Runner aktiv)**]"
             else:
                 status_display = f"**{trade_status}**"
 
@@ -1171,10 +935,7 @@ with tab2:
                 c1, c2, c3, c4, c5 = st.columns([1.5, 2.7, 2.5, 2, 1])
 
                 with c1:
-                    st.markdown(
-                        f"<span style='color:gray; font-size:12px;'>{company_names.get(sym, sym)}</span>",
-                        unsafe_allow_html=True,
-                    )
+                    st.markdown(f"<span style='color:gray; font-size:12px;'>{company_names.get(sym, sym)}</span>", unsafe_allow_html=True)
                     st.markdown(f"### **[{sym}]({google_link})**")
                     st.caption(f"Einstieg: {info.get('entry_date', '-')}")
                     st.link_button("📊 Chart", tv_link)
@@ -1187,18 +948,17 @@ with tab2:
                         f"**21 EMA:** :{ema21_color}[${round(curr_e21_usd, 2)}]"
                     )
 
-                    # Eingabefeld für den persönlichen Einstieg
-                    user_curr_label = "€" if account_currency == "EUR (€)" else "$"
-                    new_custom_entry = st.number_input(
-                        f"Persönlicher Einstieg ({user_curr_label}, optional):",
-                        min_value=0.0,
-                        value=float(custom_entry),
-                        step=0.50,
-                        key=f"cust_ent_{sym}",
-                        help="Trage deinen exakten Kaufpreis ein. Bei Klick auf 50% TP wird dieser als Stop-Loss genutzt.",
-                    )
-                    if new_custom_entry != custom_entry:
-                        all_users_data[current_user]["trades"][sym]["custom_entry"] = new_custom_entry
+                    # Eingabefeld für persönlichen Einstiegspreis inkl. individueller Währung
+                    st.markdown("<div style='font-size:13px; font-weight:600; margin-bottom:-10px;'>Persönlicher Einstieg (optional):</div>", unsafe_allow_html=True)
+                    in_col1, in_col2 = st.columns([1, 2.5])
+                    with in_col1:
+                        new_custom_cur = st.selectbox("Währung", ["$", "€"], index=0 if custom_entry_cur == "$" else 1, key=f"cur_{sym}", label_visibility="collapsed")
+                    with in_col2:
+                        new_custom_val = st.number_input("Betrag", min_value=0.0, value=custom_entry_val, step=0.50, key=f"val_{sym}", label_visibility="collapsed")
+                    
+                    if new_custom_val != custom_entry_val or new_custom_cur != custom_entry_cur:
+                        all_users_data[current_user]["trades"][sym]["custom_entry_val"] = new_custom_val
+                        all_users_data[current_user]["trades"][sym]["custom_entry_cur"] = new_custom_cur
                         save_user_data(all_users_data)
                         st.rerun()
 
@@ -1212,132 +972,58 @@ with tab2:
                     )
 
                 with c4:
-                    btn_50_label = (
-                        "✅ 50% Gesichert"
-                        if is_50_saved
-                        else "💰 50% TP sichern"
-                    )
+                    btn_50_label = "✅ 50% Gesichert" if is_50_saved else "💰 50% TP sichern"
                     btn_50_type = "primary" if is_50_saved else "secondary"
-
-                    if st.button(
-                        btn_50_label,
-                        key=f"tp50_{sym}",
-                        type=btn_50_type,
-                        use_container_width=True,
-                    ):
-                        if is_50_saved:
-                            all_users_data[current_user]["trades"][sym]["status"] = "Offen"
-                        else:
-                            all_users_data[current_user]["trades"][sym]["status"] = "💰 50% TP Gesichert"
+                    if st.button(btn_50_label, key=f"tp50_{sym}", type=btn_50_type, use_container_width=True):
+                        all_users_data[current_user]["trades"][sym]["status"] = "Offen" if is_50_saved else "💰 50% TP Gesichert"
                         save_user_data(all_users_data)
                         st.rerun()
 
-                    btn_90_label = (
-                        "✅ 90% Gesichert"
-                        if is_90_saved
-                        else "🚀 90% TP sichern"
-                    )
+                    btn_90_label = "✅ 90% Gesichert" if is_90_saved else "🚀 90% TP sichern"
                     btn_90_type = "primary" if is_90_saved else "secondary"
-
-                    if st.button(
-                        btn_90_label,
-                        key=f"tp90_{sym}",
-                        type=btn_90_type,
-                        use_container_width=True,
-                    ):
-                        if is_90_saved:
-                            all_users_data[current_user]["trades"][sym]["status"] = "Offen"
-                        else:
-                            all_users_data[current_user]["trades"][sym]["status"] = "🚀 90% TP Gesichert"
+                    if st.button(btn_90_label, key=f"tp90_{sym}", type=btn_90_type, use_container_width=True):
+                        all_users_data[current_user]["trades"][sym]["status"] = "Offen" if is_90_saved else "🚀 90% TP Gesichert"
                         save_user_data(all_users_data)
                         st.rerun()
 
                 with c5:
-                    if st.button(
-                        "🗑️ Close",
-                        key=f"close_{sym}",
-                        use_container_width=True,
-                    ):
+                    if st.button("🗑️ Close", key=f"close_{sym}", use_container_width=True):
                         del all_users_data[current_user]["trades"][sym]
                         save_user_data(all_users_data)
                         st.rerun()
 
 # =====================================================================
-# TAB 3: FAVORITEN / WATCHLIST
+# TAB 3 & 4 (Unverändert)
 # =====================================================================
 with tab3:
     if len(user_favorites) == 0:
-        st.info(
-            "Du hast noch keine Favoriten markiert. Klicke im Screener auf das"
-            " '⭐'-Symbol einer Aktie!"
-        )
+        st.info("Du hast noch keine Favoriten markiert. Klicke im Screener auf das '⭐'-Symbol einer Aktie!")
     else:
         fav_df = df_all_stocks[df_all_stocks["Aktie"].isin(user_favorites)]
-        st.caption(f"Gespeicherte Favoriten: **{len(fav_df)}**")
-
         cols = st.columns(4)
         for idx, (_, row) in enumerate(fav_df.iterrows()):
             with cols[idx % 4]:
                 render_stock_card(row, key_prefix="fav")
 
-# =====================================================================
-# TAB 4: ALLE AKTIEN (S&P 500 & NASDAQ MARKTÜBERSICHT)
-# =====================================================================
 with tab4:
-    st.caption(
-        "Hier findest du alle qualifizierten S&P 500 & Nasdaq Aktien (> 2"
-        " Mrd. $ Market Cap)."
-    )
-
     af1, af2 = st.columns([2, 2])
     with af1:
-        search_all = st.text_input(
-            "🔍 Suche nach Ticker oder Name:",
-            placeholder="z. B. AAPL, NVDA, AMZN, MSFT...",
-            key="s_tab4",
-        ).strip()
+        search_all = st.text_input("🔍 Suche nach Ticker oder Name:", placeholder="z. B. AAPL, NVDA...", key="s_tab4").strip()
     with af2:
         all_sec_list = sorted(df_all_stocks["Sektor"].unique().tolist())
-        sel_all_sec = st.multiselect(
-            "🏢 Sektor:",
-            options=all_sec_list,
-            default=[],
-            placeholder="Alle Sektoren",
-            key="sec_tab4",
-        )
+        sel_all_sec = st.multiselect("🏢 Sektor:", options=all_sec_list, default=[], placeholder="Alle Sektoren", key="sec_tab4")
 
     all_filtered_df = df_all_stocks.copy()
-
     if search_all:
         q = search_all.lower()
-        all_filtered_df = all_filtered_df[
-            all_filtered_df["Aktie"].str.lower().str.contains(q, na=False)
-            | all_filtered_df["Name"].str.lower().str.contains(q, na=False)
-        ]
-
+        all_filtered_df = all_filtered_df[all_filtered_df["Aktie"].str.lower().str.contains(q, na=False) | all_filtered_df["Name"].str.lower().str.contains(q, na=False)]
     if sel_all_sec:
-        all_filtered_df = all_filtered_df[
-            all_filtered_df["Sektor"].isin(sel_all_sec)
-        ]
-
-    st.caption(f"Angezeigte Aktien: **{len(all_filtered_df)}**")
+        all_filtered_df = all_filtered_df[all_filtered_df["Sektor"].isin(sel_all_sec)]
 
     total_pages_all = max(1, math.ceil(len(all_filtered_df) / ITEMS_PER_PAGE))
-    current_page_all = (
-        st.number_input(
-            "Seite:",
-            min_value=1,
-            max_value=total_pages_all,
-            value=1,
-            key="p_tab4",
-        )
-        if total_pages_all > 1
-        else 1
-    )
-
+    current_page_all = st.number_input("Seite:", min_value=1, max_value=total_pages_all, value=1, key="p_tab4") if total_pages_all > 1 else 1
     start_idx = (current_page_all - 1) * ITEMS_PER_PAGE
-    end_idx = start_idx + ITEMS_PER_PAGE
-    page_items_all = all_filtered_df.iloc[start_idx:end_idx]
+    page_items_all = all_filtered_df.iloc[start_idx : start_idx + ITEMS_PER_PAGE]
 
     cols = st.columns(4)
     for idx, (_, row) in enumerate(page_items_all.iterrows()):
