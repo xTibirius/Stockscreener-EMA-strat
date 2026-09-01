@@ -654,7 +654,7 @@ st.sidebar.caption(
 
 
 # ---------------------------------------------------------------------
-# 6. MODULARE KARTEN-DARSTELLUNG (LAYOUT & FORMATIERUNG AKTUALISIERT)
+# 6. MODULARE KARTEN-DARSTELLUNG (FAVORIT OBEN RECHTS IN DER ECKE)
 # ---------------------------------------------------------------------
 def render_stock_card(row, key_prefix="card"):
     sym = row["Aktie"]
@@ -663,7 +663,7 @@ def render_stock_card(row, key_prefix="card"):
     google_link = get_google_link(sym)
     tv_link = get_tradingview_link(sym)
 
-    # 1. Tagesperformance: Farbcode für reines HTML definieren
+    # 1. Tagesperformance (Farbcode für reines HTML)
     d_change = row["DailyChange"]
     chg_color = "#22c55e" if d_change >= 0 else "#ef4444"
     chg_sign = "+" if d_change >= 0 else ""
@@ -688,7 +688,7 @@ def render_stock_card(row, key_prefix="card"):
     else:
         status_tag = ":gray[**NEUTRAL**]"
 
-    # 4. Einstiegs-Badge (Theme-unabhängig lesbar)
+    # 4. Einstiegs-Badge
     if row["Entry_Grade"] == "OPTIMAL":
         badge_html = (
             "<span style='background: rgba(22, 163, 74, 0.18); color: #22c55e; "
@@ -731,51 +731,51 @@ def render_stock_card(row, key_prefix="card"):
     pos_vol_eur = pos_vol_usd * usd_to_eur_rate
 
     with st.container(border=True):
-        # Zeile 1: Firmenname & Sektor
-        st.markdown(
-            f"<span style='color:gray; font-size:11.5px;'>{row['Name']} • {row['Sektor']}</span>",
-            unsafe_allow_html=True,
-        )
+        # ZEILE 1: Firmeninfo links + Favorit-Icon ganz oben rechts in der Ecke
+        top_left, top_right = st.columns([5, 1])
+        with top_left:
+            st.markdown(
+                f"<span style='color:gray; font-size:11.5px;'>{row['Name']} • {row['Sektor']}</span>",
+                unsafe_allow_html=True,
+            )
+        with top_right:
+            fav_label = "⭐" if is_fav else "✩"
+            if st.button(
+                fav_label,
+                key=f"fav_{key_prefix}_{sym}",
+                help="Zu Favoriten hinzufügen / entfernen",
+            ):
+                if is_fav:
+                    all_users_data[current_user]["favorites"].remove(sym)
+                else:
+                    all_users_data[current_user]["favorites"].append(sym)
+                save_user_data(all_users_data)
+                st.rerun()
 
-        # Zeile 2: Setup direkt unter dem Namen
+        # ZEILE 2: Setup direkt unter dem Namen
         st.caption(f"Setup: **{row['Typ']}** | {rs_badge}")
 
-        # Zeile 3: Ticker & Status (links) + Tagesänderung & Favorit (rechts)
-        h_left, h_right = st.columns([3, 1.4])
+        # ZEILE 3: Ticker (links) + Tagesänderung (rechts)
+        h_left, h_right = st.columns([3, 1.5])
         with h_left:
             st.markdown(
                 f"### **[{sym}]({google_link})** — {status_tag}",
                 unsafe_allow_html=True,
             )
         with h_right:
-            fav_label = "⭐" if is_fav else "✩"
-            b_fav, b_chg = st.columns([1, 2])
-            with b_fav:
-                if st.button(
-                    fav_label,
-                    key=f"fav_{key_prefix}_{sym}",
-                    help="Zu Favoriten hinzufügen",
-                ):
-                    if is_fav:
-                        all_users_data[current_user]["favorites"].remove(sym)
-                    else:
-                        all_users_data[current_user]["favorites"].append(sym)
-                    save_user_data(all_users_data)
-                    st.rerun()
-            with b_chg:
-                st.markdown(
-                    f"<div style='text-align:right; font-size:12.5px; margin-top:6px;'>"
-                    f"{formatted_daily_change}</div>",
-                    unsafe_allow_html=True,
-                )
+            st.markdown(
+                f"<div style='text-align:right; font-size:12.5px; margin-top:8px;'>"
+                f"{formatted_daily_change}</div>",
+                unsafe_allow_html=True,
+            )
 
-        # Zeile 4: Kurs zuerst (mit Einstiegs-Badge)
+        # ZEILE 4: Kurs zuerst (mit Einstiegs-Badge)
         st.markdown(
             f"**Kurs:** `${row['Kurs_USD']}` *(€{row['Kurs_EUR']})* &nbsp; {badge_html}",
             unsafe_allow_html=True,
         )
 
-        # Zeile 5: Kaufzone danach
+        # ZEILE 5: Kaufzone danach
         st.markdown(
             f"<div style='background: rgba(37, 99, 235, 0.10); border-left: 3px solid #2563eb; "
             f"padding: 4px 8px; border-radius: 4px; margin: 6px 0 8px 0; font-size: 12px;'>"
@@ -785,7 +785,7 @@ def render_stock_card(row, key_prefix="card"):
             unsafe_allow_html=True,
         )
 
-        # Zeile 6: EMAs, MACD & Volumen
+        # ZEILE 6: EMAs, MACD & Volumen
         ema10_col = "green" if row["Kurs_USD"] > row["EMA10_USD"] else "red"
         ema21_col = "green" if row["Kurs_USD"] > row["EMA21_USD"] else "red"
 
@@ -797,7 +797,7 @@ def render_stock_card(row, key_prefix="card"):
             f"**MACD Hist:** `{row['MACD Hist']}` | **Vol:** {vol_badge}"
         )
 
-        # Zeile 7: Stops, Targets & Order-Plan
+        # ZEILE 7: Stops, Targets & Order-Plan
         with st.expander("🎯 Stops, Kursziele & Stückzahl"):
             st.markdown(
                 f"⚠️ **Trend-Invalidierung:** Wochenschluss `< ${row['Invalidation_USD']}` *(€{row['Invalidation_EUR']})*\n\n"
