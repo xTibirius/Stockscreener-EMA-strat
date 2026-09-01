@@ -1,11 +1,10 @@
 # =====================================================================
-# S&P 500 WEEKLY EMA STACK & MACD TRADING HUB PRO
-# Features: Portfolio-Metriken, 4-Spalten-Raster, Sortier-Engine,
-# Dual Currency (USD/EUR), CRV-Ziele (2R/3R), Sektorfilter & Watchlist
+# S&P 500 WEEKLY EMA & MACD TRADING HUB PRO (PERFORMANCE & ALLOCATION FIX)
 # =====================================================================
 from datetime import datetime
 from io import StringIO
 import json
+import math
 import os
 import urllib.parse
 import pandas as pd
@@ -17,20 +16,20 @@ import yfinance as yf
 # 1. SEITEN-KONFIGURATION
 # ---------------------------------------------------------------------
 st.set_page_config(
-    page_title="S&P 500 EMA Screener Pro",
+    page_title="S&P 500 Screener Pro",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 # ---------------------------------------------------------------------
-# 2. PERSISTENTE SPEICHERUNG (TRADES & FAVORITEN)
+# 2. PERSISTENTE DATENSPEICHERUNG (TRADES & FAVORITEN)
 # ---------------------------------------------------------------------
 DATA_FILE = "trades.json"
 
 
 def load_user_data() -> dict:
-    """Lädt Trades und Favoriten aller Nutzer aus der JSON-Datei."""
+    """Lädt Trades und Favoriten aus der lokalen JSON-Datei."""
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
@@ -42,7 +41,7 @@ def load_user_data() -> dict:
 
 
 def save_user_data(all_data: dict):
-    """Speichert die Daten sicher in der JSON-Datei."""
+    """Speichert die Trades und Favoriten sicher ab."""
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(all_data, f, indent=4, ensure_ascii=False)
 
@@ -50,7 +49,7 @@ def save_user_data(all_data: dict):
 all_users_data = load_user_data()
 
 # ---------------------------------------------------------------------
-# 3. SIDEBAR: PROFIL, RISIKO-RECHNER & WECHSELKURS
+# 3. SIDEBAR: PROFIL, RISIKO & ALLOKATIONS-LIMIT
 # ---------------------------------------------------------------------
 st.sidebar.title("👤 Profil & Einstellungen")
 
@@ -74,7 +73,7 @@ if selected_user == "➕ Neuer Nutzer...":
 else:
     current_user = selected_user
 
-# Datenstruktur initialisieren
+# Datenstruktur für aktiven Nutzer initialisieren
 if current_user not in all_users_data:
     all_users_data[current_user] = {"trades": {}, "favorites": []}
 if "trades" not in all_users_data[current_user]:
@@ -88,25 +87,38 @@ user_favorites = set(all_users_data[current_user]["favorites"])
 st.sidebar.success(f"Angemeldet als: **{current_user}**")
 st.sidebar.markdown("---")
 
-# Risiko- und Positionsgrößen-Rechner
+# Risiko- und Positionsgrößen-Management
 st.sidebar.subheader("⚖️ Risiko-Management")
 account_currency = st.sidebar.radio("Depotwährung:", ["EUR (€)", "USD ($)"])
 account_size = st.sidebar.number_input(
-    "Gesamtdepot:", min_value=500.0, value=10000.0, step=500.0
+    "Gesamtdepot:", min_value=500.0, value=5000.0, step=500.0
 )
 risk_pct = st.sidebar.slider(
-    "Max. Risiko pro Trade (%):",
+    "Max. Verlust pro Trade (%):",
     min_value=0.25,
     max_value=3.0,
     value=1.0,
     step=0.25,
+    help="Wie viel Prozent des Gesamtdepots du bei Auslösen des Stop-Loss maximal verlierst.",
+)
+
+# NEU: Maximaler Depotanteil (Schutz vor Übergewichtung bei sehr engem Stop)
+max_allocation_pct = st.sidebar.slider(
+    "Max. Depotanteil pro Aktie (%):",
+    min_value=5,
+    max_value=40,
+    value=20,
+    step=5,
+    help="Verhindert Klumpenrisiko. Z. B. maximal 20% des Depots in eine einzige Aktie.",
 )
 
 max_risk_amount = account_size * (risk_pct / 100.0)
-curr_symbol = "€" if account_currency == "EUR (€)" else "$"
+max_pos_capital = account_size * (max_allocation_pct / 100.0)
+
+curr_sym = "€" if account_currency == "EUR (€)" else "$"
 st.sidebar.caption(
-    f"Max. Verlust bei SL: **{curr_symbol}{max_risk_amount:,.2f}** ({risk_pct}%"
-    " vom Depot)"
+    f"Max. Stop-Loss Verlust: **{curr_sym}{max_risk_amount:,.2f}**\n\n"
+    f"Max. Positionsgröße: **{curr_sym}{max_pos_capital:,.2f}**"
 )
 
 
@@ -124,11 +136,11 @@ def get_tradingview_link(ticker: str) -> str:
 
 
 # ---------------------------------------------------------------------
-# 5. DATEN LADEN & STRATEGIE-ENGINE
+# 5. DATEN LADEN & STRATEGIE-ENGINE (PERFORMANCE-OPTIMIERT)
 # ---------------------------------------------------------------------
-@st.cache_data(ttl=900)
+@st.cache_data(ttl=900, show_spinner="Lade & berechne S&P 500 Daten...")
 def load_screener_data():
-    # 1. Wechselkurs EUR/USD
+    # 1. Wechselkurs EUR/USD abrufen
     try:
         fx_data = yf.download(
             "EURUSD=X", period="5d", interval="1d", progress=False
@@ -137,7 +149,7 @@ def load_screener_data():
     except Exception:
         usd_to_eur_rate = 0.92
 
-    # 2. S&P 500 Liste von Wikipedia laden
+    # 2. S&P 500 Tickerliste abrufen
     url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
     headers = {
         "User-Agent": (
@@ -157,7 +169,7 @@ def load_screener_data():
     )
     symbols = sp500_df["Symbol_Clean"].tolist()
 
-    # 3. Kursdaten laden (inkl. SPY für Relative Stärke)
+    # 3. Kursdaten gebündelt laden
     download_symbols = symbols + ["SPY"]
     raw = yf.download(
         download_symbols,
@@ -179,13 +191,11 @@ def load_screener_data():
 
     daily_change_pct = close_d.pct_change().iloc[-1] * 100.0
 
-    # SPY 12-Wochen-Performance
+    # SPY Benchmark Performance (12 Wochen)
     spy_12w_perf = 0.0
     if "SPY" in close_w.columns and len(close_w["SPY"].dropna()) >= 13:
-        spy_series = close_w["SPY"].dropna()
-        spy_12w_perf = (
-            (spy_series.iloc[-1] - spy_series.iloc[-13]) / spy_series.iloc[-13]
-        ) * 100.0
+        spy_s = close_w["SPY"].dropna()
+        spy_12w_perf = ((spy_s.iloc[-1] - spy_s.iloc[-13]) / spy_s.iloc[-13]) * 100.0
 
     # Indikatoren berechnen
     ema10 = close_w.ewm(span=10, adjust=False).mean()
@@ -206,7 +216,7 @@ def load_screener_data():
             continue
 
         series_close = close_w[sym].dropna()
-        if len(series_close) < 30:
+        if len(series_close) < 25:
             continue
 
         c_usd = series_close.iloc[-1]
@@ -222,7 +232,7 @@ def load_screener_data():
         m_hist = macd_hist[sym].iloc[-1]
         m_hist_prev = macd_hist[sym].iloc[-2]
 
-        # 12-Wochen Relative Stärke berechnen
+        # 12-Wochen Relative Stärke
         stock_12w_perf = 0.0
         if len(series_close) >= 13:
             stock_12w_perf = (
@@ -236,21 +246,19 @@ def load_screener_data():
         avg_vol = vol_sma10[sym].iloc[-1]
         vol_ratio = round(curr_vol / avg_vol, 2) if avg_vol > 0 else 1.0
 
-        # Signale & Trend
+        # Trend & Momentum
         macd_rising = m_hist > m_hist_prev
         trend_bullish = e10_usd > e21_usd
-
-        # 🛑 FEHLERBEHEBUNG: Der Kurs MUSS zwingend über der 21 EMA liegen!
         price_above_ema21 = c_usd >= e21_usd
 
-        # 1. Crossover: 10 kreuzt 21, MACD steigt UND Kurs liegt über der 21 EMA
+        # 1. Crossover-Signal
         crossover_now = (
             (e10_prev <= e21_prev)
             and (e10_usd > e21_usd)
             and price_above_ema21
         )
 
-        # 2. Retest-Logik: Wochentief dippt an EMA, Kurs schließt strikt über 21 EMA
+        # 2. Retest-Signale
         retest_ema10 = (
             trend_bullish
             and price_above_ema21
@@ -264,7 +272,6 @@ def load_screener_data():
             and not crossover_now
         )
 
-        # Vorwarnungs-Signale
         near_crossover = (
             (e10_usd < e21_usd)
             and (e10_usd / e21_usd > 0.985)
@@ -318,7 +325,7 @@ def load_screener_data():
         ema_diff_pct = ((e10_usd - e21_usd) / e21_usd) * 100.0
         dist_ema10_pct = abs(c_usd - e10_usd) / e10_usd * 100.0
 
-        # Health-Status
+        # Health Status
         if not price_above_ema21:
             health_status = "❌ INVALIDIERT"
             health_color = "red"
@@ -391,16 +398,14 @@ def load_screener_data():
     usd_to_eur_rate,
 ) = load_screener_data()
 
-st.sidebar.caption(
-    f"Aktueller Wechselkurs: **1 USD = {usd_to_eur_rate:.4f} EUR**"
-)
+st.sidebar.caption(f"Wechselkurs: **1 USD = {usd_to_eur_rate:.4f} EUR**")
 
 
 # ---------------------------------------------------------------------
-# 6. MODULARE KARTEN-DARSTELLUNG (KOMPAKT MIT EXPANDER)
+# 6. MODULARE KARTEN-DARSTELLUNG MIT KORREKTER ALLOKATION
 # ---------------------------------------------------------------------
 def render_stock_card(row, key_prefix="card"):
-    """Rendert eine Aktie im kompakten Kartendesign mit einklappbarem Trade-Plan."""
+    """Rendert eine Aktie im 4-Spalten-Layout mit korrekter Positionsgröße."""
     sym = row["Aktie"]
     is_fav = sym in user_favorites
 
@@ -411,7 +416,7 @@ def render_stock_card(row, key_prefix="card"):
     change_color = "green" if d_change >= 0 else "red"
     change_sign = "+" if d_change >= 0 else ""
 
-    # Volumen-Farbe
+    # Volumen Badge
     if row["Volumen Ratio"] >= 1.0:
         vol_badge = f":green[**{row['Volumen Ratio']}x**]"
     else:
@@ -422,7 +427,7 @@ def render_stock_card(row, key_prefix="card"):
     rs_sign = "+" if row["RS Score"] >= 0 else ""
     rs_badge = f":{rs_color}[**⚡ RS: {rs_sign}{row['RS Score']}%**]"
 
-    # Status-Tag
+    # Status Tag
     if row["Status"] == "BEREIT":
         status_tag = ":green[🚀 **BEREIT**]"
     elif row["Status"] == "FAST BEREIT":
@@ -430,26 +435,31 @@ def render_stock_card(row, key_prefix="card"):
     else:
         status_tag = ":gray[**NEUTRAL**]"
 
-    # Dynamische Positionsgrößen-Berechnung
+    # BERECHNUNG DER POSITION SOWOHL NACH RISIKO ALS AUCH NACH MAX-ALLOKATION:
+    # 1. Stückzahl nach Stop-Loss-Risiko
     risk_in_usd = (
         max_risk_amount / usd_to_eur_rate
         if account_currency == "EUR (€)"
         else max_risk_amount
     )
     shares_by_risk = int(risk_in_usd / row["RiskPerShare_USD"])
-    account_in_usd = (
-        account_size / usd_to_eur_rate
+
+    # 2. Stückzahl nach maximalem Depotanteil (z.B. max 20% des Depots)
+    max_cap_in_usd = (
+        max_pos_capital / usd_to_eur_rate
         if account_currency == "EUR (€)"
-        else account_size
+        else max_pos_capital
     )
-    max_shares_cap = int(account_in_usd / row["Kurs_USD"])
-    shares_to_buy = max(min(shares_by_risk, max_shares_cap), 1)
+    shares_by_allocation = int(max_cap_in_usd / row["Kurs_USD"])
+
+    # Das Minimum aus beiden Grenzen wählen (Kein Klumpenrisiko!)
+    shares_to_buy = max(min(shares_by_risk, shares_by_allocation), 1)
 
     pos_vol_usd = shares_to_buy * row["Kurs_USD"]
     pos_vol_eur = pos_vol_usd * usd_to_eur_rate
 
     with st.container(border=True):
-        # 1. Obere Zeile: Name, Symbol & Favoriten-Stern
+        # 1. Titelzeile
         h_left, h_right = st.columns([3.5, 1])
         with h_left:
             st.markdown(
@@ -473,25 +483,25 @@ def render_stock_card(row, key_prefix="card"):
 
         st.caption(f"Setup: **{row['Typ']}** | {rs_badge}")
 
-        # 2. Immer sichtbare Kern-Indikatoren
+        # 2. Immer sichtbare Basisdaten
         st.markdown(
             f"**Kurs:** `${row['Kurs_USD']}` | `€{row['Kurs_EUR']}`"
             f" (:{change_color}[**{change_sign}{d_change}%**])"
         )
 
-        ema10_color = "green" if row["Kurs_USD"] > row["EMA10_USD"] else "red"
-        ema21_color = "green" if row["Kurs_USD"] > row["EMA21_USD"] else "red"
+        ema10_col = "green" if row["Kurs_USD"] > row["EMA10_USD"] else "red"
+        ema21_col = "green" if row["Kurs_USD"] > row["EMA21_USD"] else "red"
 
         st.markdown(
-            f"**10 EMA:** :{ema10_color}[${row['EMA10_USD']}] | **21 EMA:**"
-            f" :{ema21_color}[${row['EMA21_USD']}]"
+            f"**10 EMA:** :{ema10_col}[${row['EMA10_USD']}] | **21 EMA:**"
+            f" :{ema21_col}[${row['EMA21_USD']}]"
         )
         st.markdown(
             f"**MACD Hist:** `{row['MACD Hist']}` | **Vol:** {vol_badge}"
         )
 
-        # 3. Einklappbarer Bereich für Trade-Plan & Details
-        with st.expander("🎯 Trade-Plan, Stop & Kursziele"):
+        # 3. Einklappbarer Trade-Plan
+        with st.expander("🎯 Trade-Plan & Stückzahl"):
             st.markdown(
                 f"🎯 **Einstiegszone:** `${row['EntryZone_Min_USD']} - ${row['EntryZone_Max_USD']}` "
                 f"*(€{row['EntryZone_Min_EUR']} - €{row['EntryZone_Max_EUR']})*"
@@ -501,16 +511,17 @@ def render_stock_card(row, key_prefix="card"):
                 f"(:red[**-{row['SL Distanz %']}%**])"
             )
             st.markdown(
-                f"🏁 **Ziel 1 (2R / CRV 1:2):** `${row['TP1_USD']}` | `€{row['TP1_EUR']}`\n\n"
-                f"🚀 **Ziel 2 (3R / CRV 1:3):** `${row['TP2_USD']}` | `€{row['TP2_EUR']}`"
+                f"🏁 **Ziel 1 (2R):** `${row['TP1_USD']}` | `€{row['TP1_EUR']}`\n\n"
+                f"🚀 **Ziel 2 (3R):** `${row['TP2_USD']}` | `€{row['TP2_EUR']}`"
             )
             st.markdown("---")
             st.markdown(
                 f"💼 **Empfohlene Stückzahl:** **{shares_to_buy} Stück**\n\n"
-                f"*Positionsvolumen: ~${pos_vol_usd:,.0f} / ~€{pos_vol_eur:,.0f}*"
+                f"*(Volumen: ~${pos_vol_usd:,.0f} / ~€{pos_vol_eur:,.0f} | max."
+                f" {max_allocation_pct}% Depotanteil)*"
             )
 
-        # 4. Aktions-Buttons
+        # 4. Buttons
         b1, b2 = st.columns(2)
         with b1:
             st.link_button("📊 TradingView", tv_link, use_container_width=True)
@@ -531,58 +542,47 @@ def render_stock_card(row, key_prefix="card"):
 
 
 # ---------------------------------------------------------------------
-# 7. PORTFOLIO-METRIKLEISTE GANZ OBEN (PUNKT 1)
+# 7. METRIKEN: INVALIDIERUNGS-STATUS (KEIN GESAMT P&L MEHR)
 # ---------------------------------------------------------------------
 st.title(f"📈 S&P 500 Trading Hub — ({current_user})")
 
-# Aggregation der offenen Positionen
-total_trades_count = len(user_trades)
-total_invested_usd = 0.0
-total_pnl_usd = 0.0
+# Zählen der aktiven und gefährdeten Trades
+total_active = len(user_trades)
+at_risk_count = 0
+invalidated_count = 0
 
 for sym, info in user_trades.items():
     if sym in close_w.columns:
         c_price = close_w[sym].dropna().iloc[-1]
-        e_price = info.get("entry_price_usd", c_price)
-        total_invested_usd += e_price
-        total_pnl_usd += c_price - e_price
+        e21_val = ema21_df[sym].dropna().iloc[-1]
 
-total_invested_eur = total_invested_usd * usd_to_eur_rate
-total_pnl_eur = total_pnl_usd * usd_to_eur_rate
-total_pnl_pct = (
-    (total_pnl_usd / total_invested_usd * 100.0)
-    if total_invested_usd > 0
-    else 0.0
-)
+        if c_price < e21_val:
+            invalidated_count += 1
+        elif c_price <= e21_val * 1.015:
+            at_risk_count += 1
 
-# 3 Metrik-Karten anzeigen
-m_col1, m_col2, m_col3 = st.columns(3)
-with m_col1:
+m1, m2, m3 = st.columns(3)
+with m1:
+    st.metric(label="🎯 Aktive Positionen", value=f"{total_active} Trades")
+with m2:
     st.metric(
-        label="🎯 Aktive Trades",
-        value=f"{total_trades_count} Positionen",
-        help="Anzahl deiner aktuell offenen Trades.",
+        label="⚠️ Nahe 21 EMA (Gefährdet)",
+        value=f"{at_risk_count} Positionen",
+        delta="Testet Support" if at_risk_count > 0 else "Alles stabil",
+        delta_color="inverse" if at_risk_count > 0 else "off",
     )
-with m_col2:
+with m3:
     st.metric(
-        label="💼 Investiertes Kapital",
-        value=f"${total_invested_usd:,.2f}",
-        delta=f"€{total_invested_eur:,.2f}",
-        delta_color="off",
-        help="Gesamtwert der getätigten Einstiege.",
-    )
-with m_col3:
-    st.metric(
-        label="📈 Gesamt-P&L (Unrealisiert)",
-        value=f"${total_pnl_usd:+,.2f} ({total_pnl_pct:+.2f}%)",
-        delta=f"€{total_pnl_eur:+,.2f}",
-        help="Kombinierter Gewinn/Verlust aller offenen Trades.",
+        label="❌ Invalidiert (Wochenschluss < 21 EMA)",
+        value=f"{invalidated_count} Positionen",
+        delta="Stop-Loss greift!" if invalidated_count > 0 else "Keine",
+        delta_color="inverse" if invalidated_count > 0 else "off",
     )
 
 st.markdown("---")
 
 # ---------------------------------------------------------------------
-# 8. TABS MIT 4-SPALTEN-LAYOUT & SORTIERUNG (PUNKTE 2 & 3)
+# 8. TABS MIT PAGINIERUNG (FÜR MAXIMALE PERFORMANCE)
 # ---------------------------------------------------------------------
 tab1, tab2, tab3, tab4 = st.tabs(
     [
@@ -593,6 +593,8 @@ tab1, tab2, tab3, tab4 = st.tabs(
     ]
 )
 
+ITEMS_PER_PAGE = 24
+
 # =====================================================================
 # TAB 1: SCREENER (NUR AKTIVE SETUPS)
 # =====================================================================
@@ -601,91 +603,109 @@ with tab1:
         df_all_stocks["Status"].isin(["BEREIT", "FAST BEREIT"])
     ]
 
-    if screener_df.empty:
-        st.info("Aktuell keine aktiven Setups gefunden.")
+    f1, f2, f3, f4, f5 = st.columns([2, 1.5, 1.5, 1.2, 1.2])
+    with f1:
+        search_query = st.text_input(
+            "🔍 Suche:", placeholder="z. B. NVDA oder Apple", key="s_tab1"
+        ).strip()
+    with f2:
+        all_sectors = sorted(screener_df["Sektor"].unique().tolist())
+        sel_sectors = st.multiselect(
+            "🏢 Sektor:",
+            options=all_sectors,
+            default=[],
+            placeholder="Alle Sektoren",
+            key="sec_tab1",
+        )
+    with f3:
+        sort_by = st.selectbox(
+            "↕️ Sortieren nach:",
+            options=[
+                "🎯 EMA 10 Nähe (Standard)",
+                "⚡ Höchste Relative Stärke (RS)",
+                "📊 Höchstes Volumen",
+                "🚀 Beste Tagesperformance (%)",
+            ],
+            key="sort_tab1",
+        )
+    with f4:
+        show_bereit = st.checkbox(
+            "🚀 Nur BEREIT", value=True, key="chk_bereit"
+        )
+        show_fast_bereit = st.checkbox(
+            "⚠️ FAST BEREIT", value=True, key="chk_fast"
+        )
+    with f5:
+        min_vol = st.checkbox(
+            "📊 Starkes Vol. (≥1.0x)", value=False, key="chk_vol"
+        )
+        show_held = st.checkbox(
+            "Bereits gekaufte einblenden", value=False, key="chk_held"
+        )
+
+    f_df = screener_df.copy()
+
+    if not show_held:
+        f_df = f_df[~f_df["Aktie"].isin(user_trades.keys())]
+
+    if search_query:
+        q = search_query.lower()
+        f_df = f_df[
+            f_df["Aktie"].str.lower().str.contains(q, na=False)
+            | f_df["Name"].str.lower().str.contains(q, na=False)
+        ]
+
+    if sel_sectors:
+        f_df = f_df[f_df["Sektor"].isin(sel_sectors)]
+
+    selected_statuses = []
+    if show_bereit:
+        selected_statuses.append("BEREIT")
+    if show_fast_bereit:
+        selected_statuses.append("FAST BEREIT")
+    f_df = f_df[f_df["Status"].isin(selected_statuses)]
+
+    if min_vol:
+        f_df = f_df[f_df["Volumen Ratio"] >= 1.0]
+
+    # Sortierung
+    if sort_by == "⚡ Höchste Relative Stärke (RS)":
+        f_df = f_df.sort_values(by="RS Score", ascending=False)
+    elif sort_by == "📊 Höchstes Volumen":
+        f_df = f_df.sort_values(by="Volumen Ratio", ascending=False)
+    elif sort_by == "🚀 Beste Tagesperformance (%)":
+        f_df = f_df.sort_values(by="DailyChange", ascending=False)
     else:
-        # Filter-Leiste
-        f1, f2, f3, f4, f5 = st.columns([2, 1.5, 1.5, 1.2, 1.2])
-        with f1:
-            search_query = st.text_input(
-                "🔍 Suche:", placeholder="z. B. NVDA oder Apple", key="s_tab1"
-            ).strip()
-        with f2:
-            all_sectors = sorted(screener_df["Sektor"].unique().tolist())
-            sel_sectors = st.multiselect(
-                "🏢 Sektor:",
-                options=all_sectors,
-                default=[],
-                placeholder="Alle Sektoren",
-                key="sec_tab1",
+        f_df = f_df.sort_values(by="Dist EMA10 %", ascending=True)
+
+    st.caption(f"Gefundene Setups: **{len(f_df)}**")
+
+    if f_df.empty:
+        st.info(
+            "Keine Setups gefunden. Schau in **Tab 4 (Alle Aktien)**, um nach"
+            " Aktien ohne aktuelles Kaufsignal zu suchen."
+        )
+    else:
+        # Paginierung für schnelle Ladezeiten
+        total_pages = max(1, math.ceil(len(f_df) / ITEMS_PER_PAGE))
+        current_page = (
+            st.number_input(
+                "Seite:",
+                min_value=1,
+                max_value=total_pages,
+                value=1,
+                key="p_tab1",
             )
-        with f3:
-            sort_by = st.selectbox(
-                "↕️ Sortieren nach:",
-                options=[
-                    "🎯 EMA 10 Nähe (Standard)",
-                    "⚡ Höchste Relative Stärke (RS)",
-                    "📊 Höchstes Volumen",
-                    "🚀 Beste Tagesperformance (%)",
-                ],
-                key="sort_tab1",
-            )
-        with f4:
-            show_bereit = st.checkbox(
-                "🚀 Nur BEREIT", value=True, key="chk_bereit"
-            )
-            show_fast_bereit = st.checkbox(
-                "⚠️ FAST BEREIT", value=True, key="chk_fast"
-            )
-        with f5:
-            min_vol = st.checkbox(
-                "📊 Starkes Vol. (≥1.0x)", value=False, key="chk_vol"
-            )
-            show_held = st.checkbox(
-                "Bereits gekaufte einblenden", value=False, key="chk_held"
-            )
+            if total_pages > 1
+            else 1
+        )
 
-        # Filter anwenden
-        f_df = screener_df.copy()
+        start_idx = (current_page - 1) * ITEMS_PER_PAGE
+        end_idx = start_idx + ITEMS_PER_PAGE
+        page_items = f_df.iloc[start_idx:end_idx]
 
-        if not show_held:
-            f_df = f_df[~f_df["Aktie"].isin(user_trades.keys())]
-
-        if search_query:
-            q = search_query.lower()
-            f_df = f_df[
-                f_df["Aktie"].str.lower().str.contains(q, na=False)
-                | f_df["Name"].str.lower().str.contains(q, na=False)
-            ]
-
-        if sel_sectors:
-            f_df = f_df[f_df["Sektor"].isin(sel_sectors)]
-
-        selected_statuses = []
-        if show_bereit:
-            selected_statuses.append("BEREIT")
-        if show_fast_bereit:
-            selected_statuses.append("FAST BEREIT")
-        f_df = f_df[f_df["Status"].isin(selected_statuses)]
-
-        if min_vol:
-            f_df = f_df[f_df["Volumen Ratio"] >= 1.0]
-
-        # Sortier-Logik (Punkt 3)
-        if sort_by == "⚡ Höchste Relative Stärke (RS)":
-            f_df = f_df.sort_values(by="RS Score", ascending=False)
-        elif sort_by == "📊 Höchstes Volumen":
-            f_df = f_df.sort_values(by="Volumen Ratio", ascending=False)
-        elif sort_by == "🚀 Beste Tagesperformance (%)":
-            f_df = f_df.sort_values(by="DailyChange", ascending=False)
-        else:
-            f_df = f_df.sort_values(by="Dist EMA10 %", ascending=True)
-
-        st.caption(f"Gefundene Setups: **{len(f_df)}**")
-
-        # 4-Spalten-Layout (Punkt 2)
         cols = st.columns(4)
-        for idx, (_, row) in enumerate(f_df.iterrows()):
+        for idx, (_, row) in enumerate(page_items.iterrows()):
             with cols[idx % 4]:
                 render_stock_card(row, key_prefix="screener")
 
@@ -714,7 +734,7 @@ with tab2:
             pnl_color = "green" if pnl_pct >= 0 else "red"
             pnl_sign = "+" if pnl_pct >= 0 else ""
 
-            # Präzise Invalidation-Logik
+            # Präzise Wochenschluss-Invalidierung
             if curr_usd < curr_e21_usd:
                 health = "❌ INVALIDIERT (Wochenschluss unter 21 EMA!)"
                 health_color = "red"
@@ -781,7 +801,7 @@ with tab2:
                         st.rerun()
 
 # =====================================================================
-# TAB 3: FAVORITEN / WATCHLIST (4-SPALTEN)
+# TAB 3: FAVORITEN / WATCHLIST
 # =====================================================================
 with tab3:
     if len(user_favorites) == 0:
@@ -799,16 +819,19 @@ with tab3:
                 render_stock_card(row, key_prefix="fav")
 
 # =====================================================================
-# TAB 4: ALLE AKTIEN (4-SPALTEN)
+# TAB 4: ALLE AKTIEN (SUCHE FÜR JEDE BELIEBIGE S&P 500 AKTIE)
 # =====================================================================
 with tab4:
-    st.caption("Hier findest du alle ~500 S&P 500 Aktien zur freien Analyse.")
+    st.caption(
+        "Hier findest du alle 500 S&P-Aktien (auch AAPL, NVDA etc., selbst"
+        " wenn sie neutral sind)."
+    )
 
     af1, af2 = st.columns([2, 2])
     with af1:
         search_all = st.text_input(
-            "🔍 Suche in allen Aktien:",
-            placeholder="z. B. Tesla, AMD...",
+            "🔍 Suche nach Ticker oder Name:",
+            placeholder="z. B. NVDA, Apple, Tesla...",
             key="s_tab4",
         ).strip()
     with af2:
@@ -835,9 +858,27 @@ with tab4:
             all_filtered_df["Sektor"].isin(sel_all_sec)
         ]
 
-    st.caption(f"Angezeigte Aktien: **{len(all_filtered_df)}**")
+    st.caption(f"Gefundene Aktien: **{len(all_filtered_df)}**")
+
+    # Paginierung für Tab 4 (verhindert Lags bei 500 Aktien)
+    total_pages_all = max(1, math.ceil(len(all_filtered_df) / ITEMS_PER_PAGE))
+    current_page_all = (
+        st.number_input(
+            "Seite:",
+            min_value=1,
+            max_value=total_pages_all,
+            value=1,
+            key="p_tab4",
+        )
+        if total_pages_all > 1
+        else 1
+    )
+
+    start_idx = (current_page_all - 1) * ITEMS_PER_PAGE
+    end_idx = start_idx + ITEMS_PER_PAGE
+    page_items_all = all_filtered_df.iloc[start_idx:end_idx]
 
     cols = st.columns(4)
-    for idx, (_, row) in enumerate(all_filtered_df.iterrows()):
+    for idx, (_, row) in enumerate(page_items_all.iterrows()):
         with cols[idx % 4]:
             render_stock_card(row, key_prefix="all")
