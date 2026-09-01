@@ -645,7 +645,7 @@ st.sidebar.caption(f"Wechselkurs: **1 USD = {usd_to_eur_rate:.4f} EUR**")
 
 
 # ---------------------------------------------------------------------
-# 6. MODULARE KARTEN-DARSTELLUNG MIT FARBHIGHLIGHTS
+# 6. MODULARE KARTEN-DARSTELLUNG (KOMPAKTES & DEZENTES STYLING)
 # ---------------------------------------------------------------------
 def render_stock_card(row, key_prefix="card"):
     sym = row["Aktie"]
@@ -658,7 +658,7 @@ def render_stock_card(row, key_prefix="card"):
     change_color = "green" if d_change >= 0 else "red"
     change_sign = "+" if d_change >= 0 else ""
 
-    # Volumen Badge
+    # Volumen-Badge
     vol_badge = (
         f":green[**{row['Volumen Ratio']}x**]"
         if row["Volumen Ratio"] >= 1.0
@@ -679,26 +679,38 @@ def render_stock_card(row, key_prefix="card"):
         status_tag = ":gray[**NEUTRAL**]"
 
     # -----------------------------------------------------------------
-    # NEU: DYNAMISCHES KURS-STYLING (DUNKELGRÜN VS. HELLGRÜN)
+    # NEU: DEZENTE, SCHLANKE BADGES FÜR KURS & ABSTAND
     # -----------------------------------------------------------------
     if row["Entry_Grade"] == "OPTIMAL":
-        # Dunkelgrün hervorgehoben (Optimaler Einstieg)
-        kurs_display_html = (
-            f"<div style='background-color: #15803d; color: #ffffff; padding: 4px 8px; border-radius: 5px; font-weight: bold; display: inline-block;'>"
-            f"💰 Kurs: ${row['Kurs_USD']} | €{row['Kurs_EUR']} (🎯 OPTIMAL)</div>"
+        # Dezentes Waldgrün (Kompakt)
+        badge_style = (
+            "background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; "
+            "padding: 2px 7px; border-radius: 4px; font-size: 11.5px; font-weight: 600;"
         )
+        tag_text = "🎯 Optimal"
     elif row["Entry_Grade"] == "NAH":
-        # Hellgrün hervorgehoben (Nahe Kaufzone)
-        kurs_display_html = (
-            f"<div style='background-color: #dcfce7; color: #166534; border: 1px solid #86efac; padding: 4px 8px; border-radius: 5px; font-weight: bold; display: inline-block;'>"
-            f"💰 Kurs: ${row['Kurs_USD']} | €{row['Kurs_EUR']} (⚡ NAH)</div>"
+        # Sanftes Salbeigrün (Kompakt)
+        badge_style = (
+            "background: #f7fee7; color: #3f6212; border: 1px solid #d9f99d; "
+            "padding: 2px 7px; border-radius: 4px; font-size: 11.5px; font-weight: 600;"
         )
+        tag_text = "⚡ Nah"
     else:
-        # Standard Grau / Neutral (Überdehnt)
-        kurs_display_html = (
-            f"<div style='background-color: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; padding: 4px 8px; border-radius: 5px; display: inline-block;'>"
-            f"Kurs: <b>${row['Kurs_USD']}</b> | €{row['Kurs_EUR']}</div>"
+        # Neutrales Schiefergrau
+        badge_style = (
+            "background: #f8fafc; color: #64748b; border: 1px solid #e2e8f0; "
+            "padding: 2px 7px; border-radius: 4px; font-size: 11.5px; font-weight: 500;"
         )
+        tag_text = "Überdehnt"
+
+    kurs_html = (
+        f"<div style='display: flex; align-items: center; gap: 8px; margin: 4px 0 6px 0;'>"
+        f"  <span style='font-size: 14px; font-weight: 700; color: #0f172a;'>"
+        f"    ${row['Kurs_USD']} <span style='font-size: 12px; font-weight: 400; color: #64748b;'>(€{row['Kurs_EUR']})</span>"
+        f"  </span>"
+        f"  <span style='{badge_style}'>{tag_text} ({row['Dist_Entry_Pct']:+.1f}%)</span>"
+        f"</div>"
+    )
 
     # Positionsgrößen-Berechnung (2.0% Risiko vs. 20% Cap)
     risk_in_usd = (
@@ -743,10 +755,11 @@ def render_stock_card(row, key_prefix="card"):
 
         st.caption(f"Setup: **{row['Typ']}** | {rs_badge}")
 
-        # Kurs mit Farb-Highlighting anzeigen
-        st.markdown(kurs_display_html, unsafe_allow_html=True)
+        # Schlanke Kurs- und Abstandszeile einbetten
+        st.markdown(kurs_html, unsafe_allow_html=True)
         st.markdown(
-            f"Tagesperformance: :{change_color}[**{change_sign}{d_change}%**] | Einstiegsabstand: `{row['Entry_Desc']}`"
+            f"Heute: :{change_color}[**{change_sign}{d_change}%**] | "
+            f"Volumen: {vol_badge}"
         )
 
         ema10_col = "green" if row["Kurs_USD"] > row["EMA10_USD"] else "red"
@@ -755,9 +768,6 @@ def render_stock_card(row, key_prefix="card"):
         st.markdown(
             f"**10 EMA:** :{ema10_col}[${row['EMA10_USD']}] | **21 EMA:**"
             f" :{ema21_col}[${row['EMA21_USD']}]"
-        )
-        st.markdown(
-            f"**MACD Hist:** `{row['MACD Hist']}` | **Vol:** {vol_badge}"
         )
 
         with st.expander("🎯 Trade-Plan, Stops & Kursziele"):
