@@ -654,7 +654,7 @@ st.sidebar.caption(
 
 
 # ---------------------------------------------------------------------
-# 6. MODULARE KARTEN-DARSTELLUNG (OPTIMIERTES LAYOUT & FARBEN)
+# 6. MODULARE KARTEN-DARSTELLUNG (LAYOUT & FORMATIERUNG AKTUALISIERT)
 # ---------------------------------------------------------------------
 def render_stock_card(row, key_prefix="card"):
     sym = row["Aktie"]
@@ -663,23 +663,24 @@ def render_stock_card(row, key_prefix="card"):
     google_link = get_google_link(sym)
     tv_link = get_tradingview_link(sym)
 
+    # 1. Tagesperformance: Farbcode für reines HTML definieren
     d_change = row["DailyChange"]
-    change_color = "green" if d_change >= 0 else "red"
-    change_sign = "+" if d_change >= 0 else ""
+    chg_color = "#22c55e" if d_change >= 0 else "#ef4444"
+    chg_sign = "+" if d_change >= 0 else ""
+    formatted_daily_change = f"<span style='color: {chg_color}; font-weight: 700;'>{chg_sign}{d_change:.2f}%</span>"
 
-    # Volumen Badge
+    # 2. Volumen & RS Badges
     vol_badge = (
         f":green[**{row['Volumen Ratio']}x**]"
         if row["Volumen Ratio"] >= 1.0
         else f":orange[**⚠️ {row['Volumen Ratio']}x**]"
     )
 
-    # Relative Stärke Badge
     rs_color = "green" if row["RS Score"] >= 0 else "red"
     rs_sign = "+" if row["RS Score"] >= 0 else ""
     rs_badge = f":{rs_color}[**⚡ RS: {rs_sign}{row['RS Score']}%**]"
 
-    # Status Tag
+    # 3. Status Tag
     if row["Status"] == "BEREIT":
         status_tag = ":green[🚀 **BEREIT**]"
     elif row["Status"] == "FAST BEREIT":
@@ -687,32 +688,30 @@ def render_stock_card(row, key_prefix="card"):
     else:
         status_tag = ":gray[**NEUTRAL**]"
 
-    # -----------------------------------------------------------------
-    # THEME-SICHERE FARB-BADGES (FÜR LIGHT- & DARK-MODE)
-    # -----------------------------------------------------------------
+    # 4. Einstiegs-Badge (Theme-unabhängig lesbar)
     if row["Entry_Grade"] == "OPTIMAL":
         badge_html = (
-            "<span style='background: rgba(22, 163, 74, 0.18); color: #22c55e;"
-            " border: 1px solid rgba(34, 197, 94, 0.4); padding: 1px 6px;"
-            " border-radius: 4px; font-size: 11px; font-weight: 700;'>"
+            "<span style='background: rgba(22, 163, 74, 0.18); color: #22c55e; "
+            "border: 1px solid rgba(34, 197, 94, 0.4); padding: 2px 6px; "
+            "border-radius: 4px; font-size: 11px; font-weight: 700;'>"
             f"🎯 OPTIMAL ({row['Dist_Entry_Pct']:+.1f}%)</span>"
         )
     elif row["Entry_Grade"] == "NAH":
         badge_html = (
-            "<span style='background: rgba(132, 204, 22, 0.18); color: #84cc16;"
-            " border: 1px solid rgba(132, 204, 22, 0.4); padding: 1px 6px;"
-            " border-radius: 4px; font-size: 11px; font-weight: 700;'>"
+            "<span style='background: rgba(132, 204, 22, 0.18); color: #84cc16; "
+            "border: 1px solid rgba(132, 204, 22, 0.4); padding: 2px 6px; "
+            "border-radius: 4px; font-size: 11px; font-weight: 700;'>"
             f"⚡ NAH ({row['Dist_Entry_Pct']:+.1f}%)</span>"
         )
     else:
         badge_html = (
-            "<span style='background: rgba(148, 163, 184, 0.15); color: #94a3b8;"
-            " border: 1px solid rgba(148, 163, 184, 0.3); padding: 1px 6px;"
-            " border-radius: 4px; font-size: 11px;'>"
+            "<span style='background: rgba(148, 163, 184, 0.15); color: #94a3b8; "
+            "border: 1px solid rgba(148, 163, 184, 0.3); padding: 2px 6px; "
+            "border-radius: 4px; font-size: 11px;'>"
             f"⚠️ Überdehnt ({row['Dist_Entry_Pct']:+.1f}%)</span>"
         )
 
-    # Positionsgrößen-Berechnung (2.0% Risiko vs. 20% Cap)
+    # 5. Positionsgrößen-Berechnung
     risk_in_usd = (
         max_risk_amount / usd_to_eur_rate
         if account_currency == "EUR (€)"
@@ -732,14 +731,17 @@ def render_stock_card(row, key_prefix="card"):
     pos_vol_eur = pos_vol_usd * usd_to_eur_rate
 
     with st.container(border=True):
-        # 1. ZEILE: NAME & SEKTOR
+        # Zeile 1: Firmenname & Sektor
         st.markdown(
             f"<span style='color:gray; font-size:11.5px;'>{row['Name']} • {row['Sektor']}</span>",
             unsafe_allow_html=True,
         )
 
-        # 2. ZEILE: TICKER + STATUS-TAG LINKS, TAGESÄNDERUNG & FAVORIT RECHTS
-        h_left, h_right = st.columns([3, 1.2])
+        # Zeile 2: Setup direkt unter dem Namen
+        st.caption(f"Setup: **{row['Typ']}** | {rs_badge}")
+
+        # Zeile 3: Ticker & Status (links) + Tagesänderung & Favorit (rechts)
+        h_left, h_right = st.columns([3, 1.4])
         with h_left:
             st.markdown(
                 f"### **[{sym}]({google_link})** — {status_tag}",
@@ -762,42 +764,40 @@ def render_stock_card(row, key_prefix="card"):
                     st.rerun()
             with b_chg:
                 st.markdown(
-                    f"<div style='text-align:right; font-size:12px; margin-top:6px;'>"
-                    f":{change_color}[**{change_sign}{d_change}%**]</div>",
+                    f"<div style='text-align:right; font-size:12.5px; margin-top:6px;'>"
+                    f"{formatted_daily_change}</div>",
                     unsafe_allow_html=True,
                 )
 
-        # 3. ZEILE: EMPFOHLENER EINSTIEG PROMINENT OBEN
+        # Zeile 4: Kurs zuerst (mit Einstiegs-Badge)
         st.markdown(
-            f"<div style='background: rgba(37, 99, 235, 0.10); border-left: 3px solid #2563eb; padding: 4px 8px; border-radius: 4px; margin: 4px 0 8px 0; font-size: 12px;'>"
+            f"**Kurs:** `${row['Kurs_USD']}` *(€{row['Kurs_EUR']})* &nbsp; {badge_html}",
+            unsafe_allow_html=True,
+        )
+
+        # Zeile 5: Kaufzone danach
+        st.markdown(
+            f"<div style='background: rgba(37, 99, 235, 0.10); border-left: 3px solid #2563eb; "
+            f"padding: 4px 8px; border-radius: 4px; margin: 6px 0 8px 0; font-size: 12px;'>"
             f"🎯 <b>Kaufzone (10 EMA):</b> <code>${row['EntryZone_Min_USD']} - ${row['EntryZone_Max_USD']}</code> "
             f"<i>(€{row['EntryZone_Min_EUR']} - €{row['EntryZone_Max_EUR']})</i>"
             f"</div>",
             unsafe_allow_html=True,
         )
 
-        # 4. ZEILE: AKTUELLER KURS + EINSTIEGS-BADGE
-        st.markdown(
-            f"**Kurs:** `${row['Kurs_USD']}` *(€{row['Kurs_EUR']})* &nbsp; {badge_html}",
-            unsafe_allow_html=True,
-        )
-
-        # 5. ZEILE: SETUP-TYP & RELATIVE STÄRKE
-        st.caption(f"Setup: **{row['Typ']}** | {rs_badge}")
-
-        # 6. ZEILE: EMAs, MACD & VOLUMEN
+        # Zeile 6: EMAs, MACD & Volumen
         ema10_col = "green" if row["Kurs_USD"] > row["EMA10_USD"] else "red"
         ema21_col = "green" if row["Kurs_USD"] > row["EMA21_USD"] else "red"
 
         st.markdown(
-            f"**10 EMA:** :{ema10_col}[${row['EMA10_USD']}] | **21 EMA:**"
-            f" :{ema21_col}[${row['EMA21_USD']}]"
+            f"**10 EMA:** :{ema10_col}[${row['EMA10_USD']}] | "
+            f"**21 EMA:** :{ema21_col}[${row['EMA21_USD']}]"
         )
         st.markdown(
             f"**MACD Hist:** `{row['MACD Hist']}` | **Vol:** {vol_badge}"
         )
 
-        # 7. AUSKLAPPBARER TRADE-PLAN
+        # Zeile 7: Stops, Targets & Order-Plan
         with st.expander("🎯 Stops, Kursziele & Stückzahl"):
             st.markdown(
                 f"⚠️ **Trend-Invalidierung:** Wochenschluss `< ${row['Invalidation_USD']}` *(€{row['Invalidation_EUR']})*\n\n"
@@ -821,8 +821,7 @@ def render_stock_card(row, key_prefix="card"):
             st.markdown("---")
             st.markdown(
                 f"💼 **Empfohlene Stückzahl:** **{shares_to_buy} Stück**\n\n"
-                f"*(Volumen: ~${pos_vol_usd:,.0f} / ~€{pos_vol_eur:,.0f} | 2%"
-                f" Risiko, max. {max_allocation_pct}% Depot)*"
+                f"*(Volumen: ~${pos_vol_usd:,.0f} / ~€{pos_vol_eur:,.0f} | 2% Risiko, max. {max_allocation_pct}% Depot)*"
             )
 
         b1, b2 = st.columns(2)
@@ -852,7 +851,6 @@ def render_stock_card(row, key_prefix="card"):
                 }
                 save_user_data(all_users_data)
                 st.rerun()
-
 
 # ---------------------------------------------------------------------
 # 7. HEADER & MARKT-AMPEL
