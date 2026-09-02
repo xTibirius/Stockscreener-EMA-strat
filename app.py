@@ -357,7 +357,10 @@ def load_screener_data():
         spy_close_val = spy_s.iloc[-1]
         spy_e21_val = ema21["SPY"].dropna().iloc[-1]
         spy_e10_val = ema10["SPY"].dropna().iloc[-1]
-        spy_market_bullish = (spy_close_val >= spy_e21_val) and (spy_e10_val >= spy_e21_val)
+        
+        # SPY-Filter exakt wie im Backtest (Nur Kurs >= 21 EMA)
+        spy_market_bullish = (spy_close_val >= spy_e21_val) 
+        
         spy_12w_perf = ((spy_s.iloc[-1] - spy_s.iloc[-13]) / spy_s.iloc[-13]) * 100.0
 
     results = []
