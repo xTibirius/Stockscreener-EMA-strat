@@ -8,7 +8,8 @@
 # - Meine Trades (Tab 2) intelligent sortiert nach Handlungsbedarf
 # - RS-Score als Standard-Filter, kombinierbar mit Einstiegs-Zonen
 # - Flexibler persönlicher Kaufkurs (€/$) & dynamischer Stop-Loss
-# - NEU: Strenge Profil-Trennung durch dynamische Widget-Keys!
+# - Strenge Profil-Trennung durch dynamische Widget-Keys
+# - NEU: TP1 & TP2 exakt nach Backtest-Mathematik (Maximaler Profit Factor)
 # =====================================================================
 
 from datetime import datetime
@@ -105,7 +106,6 @@ if selected_user == "➕ Neuer Nutzer...":
     else:
         current_user = new_user
         if current_user not in all_users_data:
-            # Neues Profil mit Standard-Einstellungen anlegen
             all_users_data[current_user] = {
                 "trades": {}, 
                 "favorites": [], 
@@ -121,7 +121,6 @@ if selected_user == "➕ Neuer Nutzer...":
 else:
     current_user = selected_user
 
-# Datenstruktur für ältere Profile absichern (Rückwärtskompatibilität)
 if current_user not in all_users_data:
     all_users_data[current_user] = {"trades": {}, "favorites": [], "settings": {}}
 if "trades" not in all_users_data[current_user]:
@@ -154,7 +153,6 @@ st.sidebar.markdown("---")
 
 st.sidebar.subheader("⚖️ Risiko-Management")
 
-# Individuelle Nutzer-Einstellungen aus der Datenbank laden
 def_currency = user_settings.get("currency", "EUR (€)")
 def_acc_size = float(user_settings.get("account_size", 10000.0))
 def_risk_pct = float(user_settings.get("risk_pct", 2.0))
@@ -162,14 +160,11 @@ def_alloc_pct = int(user_settings.get("max_allocation_pct", 20))
 
 curr_idx = 0 if def_currency == "EUR (€)" else 1
 
-# WICHTIG: Die Keys haben nun den Nutzernamen als Suffix (z.B. acc_size_Papa)
-# Das trennt die Regler der Profile strikt voneinander.
 new_currency = st.sidebar.radio("Depotwährung:", ["EUR (€)", "USD ($)"], index=curr_idx, key=f"curr_{current_user}")
 new_acc_size = st.sidebar.number_input("Gesamtdepot:", min_value=500.0, value=def_acc_size, step=500.0, key=f"acc_size_{current_user}")
 new_risk_pct = st.sidebar.slider("Max. Verlust pro Trade (%):", min_value=0.5, max_value=3.0, value=def_risk_pct, step=0.25, key=f"risk_pct_{current_user}")
 new_max_alloc = st.sidebar.slider("Max. Depotanteil pro Aktie (%):", min_value=5, max_value=30, value=def_alloc_pct, step=5, key=f"max_alloc_{current_user}")
 
-# Falls der Nutzer in der Seitenleiste etwas ändert, wird es SOFORT für sein Profil gespeichert
 if (new_currency != def_currency or 
     new_acc_size != def_acc_size or 
     new_risk_pct != def_risk_pct or 
@@ -183,7 +178,6 @@ if (new_currency != def_currency or
     }
     save_user_data(all_users_data)
 
-# Variablen für die Berechnungen im Rest des Programms übernehmen
 account_currency = new_currency
 account_size = new_acc_size
 risk_pct = new_risk_pct
@@ -433,25 +427,23 @@ def load_screener_data():
         swing_52w_val = high_52w[sym].iloc[-1]
         ath_val = ath_rolling[sym].iloc[-1]
 
+        # =========================================================
+        # ZIELE EXAKT WIE IM BACKTEST BERECHNEN (MATHEMATISCHES OPTIMUM)
+        # =========================================================
         crv_20w = (((swing_20w_val - c_usd) / risk_per_share_usd) if pd.notna(swing_20w_val) and swing_20w_val > c_usd else 0.0)
         if crv_20w >= 3.0:
             tp1_usd, tp1_label = swing_20w_val, f"20W-Hoch (CRV 1:{crv_20w:.1f})"
         else:
-            calc_tp1 = c_usd + (3.0 * risk_per_share_usd)
-            if calc_tp1 >= ath_val * 0.985:
-                tp1_usd, tp1_label = get_next_50_level(max(ath_val, calc_tp1)), "50er-Marke ATH"
-            else:
-                tp1_usd, tp1_label = calc_tp1, "Fester 1:3 CRV"
+            tp1_usd, tp1_label = c_usd + (3.0 * risk_per_share_usd), "Fester 1:3 CRV"
 
         crv_52w = (((swing_52w_val - c_usd) / risk_per_share_usd) if pd.notna(swing_52w_val) and swing_52w_val > tp1_usd * 1.01 else 0.0)
         if crv_52w > 3.0:
             tp2_usd, tp2_label = swing_52w_val, f"52W-Hoch (CRV 1:{crv_52w:.1f})"
         else:
-            calc_tp2 = c_usd + (5.0 * risk_per_share_usd)
-            if tp1_usd >= ath_val * 0.985 or calc_tp2 >= ath_val * 0.985:
+            if tp1_usd >= ath_val * 0.985:
                 tp2_usd, tp2_label = get_next_50_level(max(ath_val, tp1_usd)), "50er-Marke ATH"
             else:
-                tp2_usd, tp2_label = calc_tp2, "Fester 1:5 CRV"
+                tp2_usd, tp2_label = c_usd + (5.0 * risk_per_share_usd), "Fester 1:5 CRV"
 
         results.append({
             "Aktie": sym, "Name": company_names.get(sym, sym), "Sektor": company_sectors.get(sym, "Sonstige"),
@@ -769,7 +761,6 @@ with tab2:
             if trade_status == "Offen" and curr_usd >= tp1_usd: tp_ready = True
             elif is_50_saved and curr_usd >= tp2_usd: tp_ready = True
 
-            # PRIORITÄT UND ICON ZUWEISEN FÜR SORTIERUNG
             if is_invalidated:
                 priority = 1
                 action_icon = "❌"
@@ -889,7 +880,6 @@ with tab2:
                     st.markdown("<div style='font-size:13px; font-weight:600; margin-bottom:-10px;'>Persönlicher Einstieg (optional):</div>", unsafe_allow_html=True)
                     in_col1, in_col2 = st.columns([1, 2.5])
                     with in_col1:
-                        # WICHTIG: Key-Änderung für Profil-Trennung!
                         new_custom_cur = st.selectbox("Währung", ["€", "$"], index=0 if custom_entry_cur == "€" else 1, key=f"cur_{sym}_{current_user}", label_visibility="collapsed")
                     with in_col2:
                         new_custom_val = st.number_input("Betrag", min_value=0.0, value=custom_entry_val, step=0.50, key=f"val_{sym}_{current_user}", label_visibility="collapsed")
