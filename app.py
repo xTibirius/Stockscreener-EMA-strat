@@ -65,27 +65,60 @@ div[data-testid="stVerticalBlockBorderWrapper"]:hover {
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------
-# 2. TOAST BENACHRICHTIGUNGEN & PERSISTENZ
+# 2. TOAST BENACHRICHTIGUNGEN & PERSISTENZ (CLOUD-DATENBANK)
 # ---------------------------------------------------------------------
 if "toast_msg" in st.session_state and st.session_state.toast_msg:
     st.toast(st.session_state.toast_msg)
     st.session_state.toast_msg = None
 
-DATA_FILE = "trades.json"
+# Wir prüfen, ob die Cloud-Schlüssel in den Streamlit-Secrets hinterlegt sind
+try:
+    JSONBIN_KEY = st.secrets["JSONBIN_KEY"]
+    JSONBIN_BIN_ID = st.secrets["JSONBIN_BIN_ID"]
+    USE_CLOUD_DB = True
+except Exception:
+    USE_CLOUD_DB = False
+    DATA_FILE = "trades.json"
 
 def load_user_data() -> dict:
-    if os.path.exists(DATA_FILE):
+    if USE_CLOUD_DB:
         try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            url = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}/latest"
+            headers = {"X-Master-Key": JSONBIN_KEY}
+            req = requests.get(url, headers=headers, timeout=10)
+            if req.status_code == 200:
+                data = req.json().get("record", {})
                 return data if isinstance(data, dict) else {}
-        except Exception:
+        except Exception as e:
+            st.sidebar.error("Fehler beim Laden der Cloud-Datenbank.")
             return {}
-    return {}
+        return {}
+    else:
+        # Fallback für lokale Tests auf deinem Computer
+        if os.path.exists(DATA_FILE):
+            try:
+                with open(DATA_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    return data if isinstance(data, dict) else {}
+            except Exception:
+                return {}
+        return {}
 
 def save_user_data(all_data: dict):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(all_data, f, indent=4, ensure_ascii=False)
+    if USE_CLOUD_DB:
+        try:
+            url = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
+            headers = {
+                "Content-Type": "application/json",
+                "X-Master-Key": JSONBIN_KEY
+            }
+            requests.put(url, json=all_data, headers=headers, timeout=10)
+        except Exception as e:
+            st.sidebar.error("Fehler beim Speichern in der Cloud-Datenbank.")
+    else:
+        # Fallback für lokale Tests auf deinem Computer
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(all_data, f, indent=4, ensure_ascii=False)
 
 all_users_data = load_user_data()
 
